@@ -194,6 +194,29 @@ export const useServerOperations = ({
     return matlabCmd;
   };
 
+  // Helper function to wait for a block to become ready
+  const waitForBlockReady = (blockId, blockName, setBlockProcesses, timeout = 30000) => {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      let isReady = false;
+      
+      const checkInterval = setInterval(() => {
+        setBlockProcesses(prev => {
+          const proc = prev[blockId];
+          if (proc && proc.status === 'running' && !isReady) {
+            isReady = true;
+            clearInterval(checkInterval);
+            resolve(true);
+          } else if (Date.now() - startTime > timeout && !isReady) {
+            clearInterval(checkInterval);
+            reject(new Error(`Timeout waiting for ${blockName} to become ready`));
+          }
+          return prev;
+        });
+      }, 100);
+    });
+  };
+
   const handleStart = async () => {
     if (!projectDir) {
       alert('Loading project directory...');
@@ -202,7 +225,7 @@ export const useServerOperations = ({
 
     try {
       addLog('info', '========================================');
-      addLog('info', 'Starting all blocks with startWithAll=true...');
+      addLog('info', 'Starting blocks sequentially (waiting for each to be ready)...');
       addLog('info', '========================================');
       
       for (const block of blocks) {
@@ -213,6 +236,7 @@ export const useServerOperations = ({
       }
 
       const sortedBlocks = topologicalSort(blocks, connections);
+      const blocksToStart = sortedBlocks.filter(b => b.startWithAll);
       
       let startedCount = 0;
       let skippedCount = 0;
@@ -229,7 +253,9 @@ export const useServerOperations = ({
         try {
           const matlabCmd = buildBlockCommand(block, connections);
           
-          addLog('info', `Starting ${block.name}...`);
+          const currentBlockNum = startedCount + 1;
+          const totalBlocks = blocksToStart.length;
+          addLog('info', `[${currentBlockNum}/${totalBlocks}] Starting ${block.name}...`);
           
           const platform = await window.electronAPI.getPlatform();
           const envCmd = platform === 'win32' 
@@ -253,20 +279,27 @@ export const useServerOperations = ({
                 name: block.name
               }
             }));
-            addLog('info', `${block.name} process started (PID: ${procResult.pid}), waiting for BLOCK_READY...`);
-            startedCount++;
+            addLog('info', `${block.name} process launched (PID: ${procResult.pid}), waiting for BLOCK_READY...`);
+            
+            // Wait for this block to be ready before starting the next one
+            try {
+              await waitForBlockReady(block.id, block.name, setBlockProcesses);
+              addLog('success', `✓ ${block.name} is READY`);
+              startedCount++;
+            } catch (err) {
+              addLog('error', `✗ ${block.name} failed to become ready: ${err.message}`);
+              addLog('warning', 'Continuing with next block...');
+            }
           } else {
             addLog('error', `Failed to start ${block.name}: ${procResult.error}`);
           }
-
-          await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (err) {
           addLog('error', `Failed to start ${block.name}: ${err.message}`);
         }
       }
 
       addLog('info', '========================================');
-      addLog('success', `Block launch complete: ${startedCount} started, ${skippedCount} skipped`);
+      addLog('success', `Sequential startup complete: ${startedCount} started, ${skippedCount} skipped`);
       addLog('info', '========================================');
     } catch (err) {
       addLog('error', `Block start failed: ${err.message}`);

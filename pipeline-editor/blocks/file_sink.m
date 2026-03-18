@@ -17,14 +17,6 @@ function file_sink(pipeIn)
     config = parse_block_config();
     send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
     
-    fprintf('========================================\n');
-    fprintf('FILE SINK - Reception Mode\n');
-    fprintf('========================================\n');
-    fprintf('Pipe In:      %s (%d bytes)\n', pipeIn, config.inputSize);
-    fprintf('Output Dir:   %s\n', config.outputDirectory);
-    fprintf('Report File:  %s\n', config.reportFile);
-    fprintf('========================================\n\n');
-    
     try
         if ~exist(config.outputDirectory, 'dir')
             mkdir(config.outputDirectory);
@@ -199,9 +191,7 @@ function file_sink(pipeIn)
                 currentFile.data = [];
                 currentFile.errors = 0;
                 currentFile.packets = 0;
-                
-                fprintf('\nReceiving: %s (%.2f KB)\n', fileName, fileSize/1024);
-                
+                                
                 if errorFlag ~= 0
                     currentFile.errors = currentFile.errors + 1;
                 end

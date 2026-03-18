@@ -88,11 +88,14 @@ export const useFileOperations = ({
 
   const handleLoadDiagram = async () => {
     try {
-      const filepath = await window.electronAPI.selectFile([
+      const filepaths = await window.electronAPI.selectFile([
         { name: 'Pipeline Diagram', extensions: ['psd'] }
       ]);
       
-      if (!filepath) return;
+      if (!filepaths || filepaths.length === 0) return;
+      
+      // selectFile returns an array, so take the first file
+      const filepath = Array.isArray(filepaths) ? filepaths[0] : filepaths;
       
       const content = await window.electronAPI.readFile(filepath);
       const diagram = JSON.parse(content);

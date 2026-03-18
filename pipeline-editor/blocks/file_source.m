@@ -18,15 +18,7 @@ function file_source(pipeOut)
     PACKET_SIZE = 1500;
     
     send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
-    
-    fprintf('========================================\n');
-    fprintf('FILE SOURCE - Single Send Mode\n');
-    fprintf('========================================\n');
-    fprintf('Pipe Out:    %s\n', pipeOut);
-    fprintf('Packet Size: %d bytes\n', PACKET_SIZE);
-    fprintf('Source Dir:  %s\n', config.sourceDirectory);
-    fprintf('========================================\n\n');
-    
+
     try
         if ~exist(config.sourceDirectory, 'dir')
             mkdir(config.sourceDirectory);

@@ -14,6 +14,7 @@ with open(output_file, "w", encoding="utf-8") as out_file:
         # Skip specific files
         skip_files = {
             "package-lock.json",
+            "pipeline_diagram.psd",
             "project_files - Copy.txt",
             "icon.ico",
             ".gitignore",

@@ -16,19 +16,9 @@ function crc_encode(pipeIn, pipeOut)
     config = parse_block_config();
     send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
     
-    fprintf('========================================\n');
-    fprintf('CRC ENCODE - Continuous Mode\n');
-    fprintf('========================================\n');
-    fprintf('Pipe In:     %s (%d bytes)\n', pipeIn, config.inputSize);
-    fprintf('Pipe Out:    %s (%d bytes)\n', pipeOut, config.outputSize);
-    fprintf('Polynomial:  0x%08X\n', config.polynomial);
-    fprintf('========================================\n\n');
-    
     try
         % Build CRC-32 lookup table
-        fprintf('Building CRC-32 lookup table...\n');
         crcTable = build_crc32_table();
-        fprintf('CRC table ready\n');
         
         send_protocol_message('BLOCK_READY', config.blockId, config.name, '');
         
