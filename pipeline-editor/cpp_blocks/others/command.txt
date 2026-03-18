@@ -1,0 +1,1 @@
+nvcc -O3 -Xcompiler /openmp channel_decode.cu -o bin/channel_decode.exe -lcudart
