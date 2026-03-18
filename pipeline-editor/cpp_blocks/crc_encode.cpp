@@ -54,9 +54,18 @@ void process_crc_encode(
     
     // MANUAL READ - Block decides when to read
     int actualCount = input.read(inputBatch);
-    
+
     int inputPacketSize = input.getPacketSize();
     int outputPacketSize = output.getPacketSize();
+
+    static bool firstBatch = true;
+    if (firstBatch) {
+        firstBatch = false;
+        printf("[CrcEncode] pkt[0] INPUT : %d bits\n", inputPacketSize * 8);
+        printf("[CrcEncode] pkt[0] OUTPUT: %d bits (data=%d + CRC=32)\n",
+               outputPacketSize * 8, inputPacketSize * 8);
+        fflush(stdout);
+    }
     
     memset(outputBatch, 0, output.getBufferSize());
     

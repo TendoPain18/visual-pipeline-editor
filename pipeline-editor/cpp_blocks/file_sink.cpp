@@ -111,9 +111,7 @@ FileSinkData init_file_sink(const BlockConfig &config) {
         rpt << "========================================\n\n";
     }
 
-    printf("[FileSink] Output directory : %s\n", data.outputDirectory.c_str());
-    printf("[FileSink] Error report     : %s\n", data.reportPath.c_str());
-    printf("[FileSink] Streaming mode active\n\n");
+
     return data;
 }
 
@@ -172,6 +170,13 @@ void process_file_sink(
     }
 
     // ---- Extract data + track errors ----
+    static bool firstBatch = true;
+    if (firstBatch && actualCount > 0) {
+        firstBatch = false;
+        printf("[FileSink] pkt[0] INPUT : %d bits (data=%d + error_flag=8)\n",
+               packetSize * 8, dataSize * 8);
+        fflush(stdout);
+    }
     std::vector<uint8_t> newData;
     newData.reserve((size_t)actualCount * dataSize);
 

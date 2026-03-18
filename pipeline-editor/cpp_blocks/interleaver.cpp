@@ -6,59 +6,55 @@
 // IEEE 802.11a Interleaver
 //
 // Inputs:
-//   in[0]: Encoded DATA pipe from channel_encode  (3030 bytes/pkt, max)  <- FIRST
-//   in[1]: rate_encoded_length pipe               (3 bytes/pkt)
+//   in[0]: Encoded DATA pipe from channel_encode  (3030 bytes/pkt, max)
+//   in[1]: rate_encoded_length pipe               (5 bytes/pkt)
 //             Byte 0: rate_value
-//             Byte 1: encoded_len_lo
-//             Byte 2: encoded_len_hi
+//             Bytes 1-4: encoded_len_bits (uint32 LE) -- EXACT encoded bit count
 //
 // Outputs:
-//   out[0]: Interleaved DATA pipe                 (3030 bytes/pkt, max)  <- FIRST
-//   out[1]: rate_encoded_length passthrough       (3 bytes/pkt, unchanged)
+//   out[0]: Interleaved DATA pipe                 (3030 bytes/pkt, max)
+//   out[1]: rate_encoded_length passthrough       (5 bytes/pkt, unchanged)
 //
 // Processing per packet:
-//   - Reads encoded_length from RATE pipe to know how many bytes are meaningful.
-//   - First 6 bytes (48 bits) = SIGNAL field -> interleaved with BPSK params (NCBPS=48)
-//   - Remaining bytes = DATA field -> interleaved with rate-dependent params
-//   - Bytes beyond encoded_length are zero-padded in output
+//   - First 48 bits  = SIGNAL field -> interleaved with BPSK params (NCBPS=48)
+//   - Remaining bits = DATA field   -> interleaved with rate-dependent params
 //
 // Interleaver permutation (IEEE 802.11a, two-step):
 //   Step 1: k -> i = (NCBPS/16)*mod(k,16) + floor(k/16)
 //   Step 2: i -> j = s*floor(i/s) + mod(i + NCBPS - floor(16*i/NCBPS), s)
 //   where s = max(floor(NBPSC/2), 1)
-//
-// Rate -> (NBPSC, NCBPS):
-//   13 ->  6 Mbps: BPSK,   NBPSC=1, NCBPS=48
-//   15 ->  9 Mbps: BPSK,   NBPSC=1, NCBPS=48
-//    5 -> 12 Mbps: QPSK,   NBPSC=2, NCBPS=96
-//    7 -> 18 Mbps: QPSK,   NBPSC=2, NCBPS=96
-//    9 -> 24 Mbps: 16-QAM, NBPSC=4, NCBPS=192
-//   11 -> 36 Mbps: 16-QAM, NBPSC=4, NCBPS=192
-//    1 -> 48 Mbps: 64-QAM, NBPSC=6, NCBPS=288
-//    3 -> 54 Mbps: 64-QAM, NBPSC=6, NCBPS=288
 // ============================================================
 
-struct RateModParams {
-    int NBPSC;
-    int NCBPS;
-};
+struct RateModParams { int NBPSC; int NCBPS; };
 
 static RateModParams getModParams(uint8_t rateVal) {
     switch (rateVal) {
-        case 13: return {1,  48};   //  6 Mbps BPSK
-        case 15: return {1,  48};   //  9 Mbps BPSK
-        case  5: return {2,  96};   // 12 Mbps QPSK
-        case  7: return {2,  96};   // 18 Mbps QPSK
-        case  9: return {4, 192};   // 24 Mbps 16-QAM
-        case 11: return {4, 192};   // 36 Mbps 16-QAM
-        case  1: return {6, 288};   // 48 Mbps 64-QAM
-        case  3: return {6, 288};   // 54 Mbps 64-QAM
-        default: return {2,  96};   // fallback: 12 Mbps QPSK
+        case 13: return {1,  48};
+        case 15: return {1,  48};
+        case  5: return {2,  96};
+        case  7: return {2,  96};
+        case  9: return {4, 192};
+        case 11: return {4, 192};
+        case  1: return {6, 288};
+        case  3: return {6, 288};
+        default: return {2,  96};
     }
 }
 
-// Interleave a block of bits (in-place, permutes bit[k] -> position j).
-// 'bits' has 'NCBPS' entries. 'out' receives the permuted bits.
+static const char* rateNameFromVal(uint8_t rateVal) {
+    switch (rateVal) {
+        case 13: return "6 Mbps (BPSK 1/2)";
+        case 15: return "9 Mbps (BPSK 3/4)";
+        case  5: return "12 Mbps (QPSK 1/2)";
+        case  7: return "18 Mbps (QPSK 3/4)";
+        case  9: return "24 Mbps (16-QAM 1/2)";
+        case 11: return "36 Mbps (16-QAM 3/4)";
+        case  1: return "48 Mbps (64-QAM 2/3)";
+        case  3: return "54 Mbps (64-QAM 3/4)";
+        default: return "UNKNOWN";
+    }
+}
+
 static void interleave_block(const uint8_t* bits, uint8_t* out, int NCBPS, int NBPSC) {
     int s = (NBPSC / 2 > 1) ? NBPSC / 2 : 1;
     for (int k = 0; k < NCBPS; k++) {
@@ -68,19 +64,11 @@ static void interleave_block(const uint8_t* bits, uint8_t* out, int NCBPS, int N
     }
 }
 
-struct InterleaverData {
-    int frameCount;
-};
+struct InterleaverData { int frameCount; };
 
 InterleaverData init_interleaver(const BlockConfig& config) {
     InterleaverData data;
     data.frameCount = 0;
-
-    printf("[Interleaver] IEEE 802.11a two-step interleaver\n");
-    printf("[Interleaver] SIGNAL field: BPSK, NCBPS=48 (always)\n");
-    printf("[Interleaver] DATA field:   rate-dependent NCBPS\n");
-    printf("[Interleaver] DATA pipe: 3030 bytes/pkt, RATE pipe: 3 bytes/pkt\n");
-    printf("[Interleaver] Ready\n");
 
     return data;
 }
@@ -91,14 +79,10 @@ void process_interleaver(
     InterleaverData& customData,
     const BlockConfig& config
 ) {
-    // in[0]  = Encoded DATA (3030) -- FIRST (rate measurement)
-    // in[1]  = rate_encoded_length (3)
-    // out[0] = Interleaved DATA (3030) -- FIRST
-    // out[1] = rate_encoded_length passthrough (3)
-    PipeIO inData  (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);
-    PipeIO inRate  (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);
-    PipeIO outData (pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]);
-    PipeIO outRate (pipeOut[1], config.outputPacketSizes[1], config.outputBatchSizes[1]);
+    PipeIO inData (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);
+    PipeIO inRate (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);
+    PipeIO outData(pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]);
+    PipeIO outRate(pipeOut[1], config.outputPacketSizes[1], config.outputBatchSizes[1]);
 
     int8_t* dataBuf    = new int8_t[inData.getBufferSize()];
     int8_t* rateBuf    = new int8_t[inRate.getBufferSize()];
@@ -106,108 +90,127 @@ void process_interleaver(
     int8_t* rateOutBuf = new int8_t[outRate.getBufferSize()];
 
     const int inDataPkt  = config.inputPacketSizes[0];   // 3030
-    const int inRatePkt  = config.inputPacketSizes[1];   // 3
+    const int inRatePkt  = config.inputPacketSizes[1];   // 5
     const int outDataPkt = config.outputPacketSizes[0];  // 3030
 
-    // STEP 1: Read DATA batch first (rate measurement)
-    int actualCount = inData.read(dataBuf);
+    const bool isFirstBatch = (customData.frameCount == 0);
 
-    // STEP 2: Read RATE/encoded_length batch
+    int actualCount = inData.read(dataBuf);
     inRate.read(rateBuf);
 
-    // Passthrough RATE unchanged
+    // Rate pipe passthrough unchanged
     memcpy(rateOutBuf, rateBuf, outRate.getBufferSize());
     memset(dataOutBuf, 0, outData.getBufferSize());
 
-    // STEP 3: Interleave each packet
+
+
     for (int i = 0; i < actualCount; i++) {
+        const bool dbg = isFirstBatch && (i == 0);
+
         const int dataOff = i * inDataPkt;
         const int rateOff = i * inRatePkt;
         const int outOff  = i * outDataPkt;
 
-        // Extract rate and encoded length from RATE pipe
-        uint8_t rateVal    = (uint8_t)((int32_t)rateBuf[rateOff + 0] + 128);
-        uint8_t encLenLo   = (uint8_t)((int32_t)rateBuf[rateOff + 1] + 128);
-        uint8_t encLenHi   = (uint8_t)((int32_t)rateBuf[rateOff + 2] + 128);
-        int encodedLength  = (int)encLenLo | ((int)encLenHi << 8);
-        if (encodedLength > inDataPkt) encodedLength = inDataPkt;
+        // Decode rate pipe
+        uint8_t rateVal = (uint8_t)((int32_t)rateBuf[rateOff + 0] + 128);
+        uint8_t b1      = (uint8_t)((int32_t)rateBuf[rateOff + 1] + 128);
+        uint8_t b2      = (uint8_t)((int32_t)rateBuf[rateOff + 2] + 128);
+        uint8_t b3      = (uint8_t)((int32_t)rateBuf[rateOff + 3] + 128);
+        uint8_t b4      = (uint8_t)((int32_t)rateBuf[rateOff + 4] + 128);
+        uint32_t encLenBits = (uint32_t)b1 | ((uint32_t)b2 << 8)
+                            | ((uint32_t)b3 << 16) | ((uint32_t)b4 << 24);
 
-        // Convert meaningful bytes to uint8
-        uint8_t pkt[3030];
-        for (int j = 0; j < encodedLength; j++) {
-            pkt[j] = (uint8_t)((int32_t)dataBuf[dataOff + j] + 128);
-        }
+        int encBitCount  = (int)encLenBits;  // EXACT bits
+        int encByteCount = (encBitCount + 7) / 8;
+        if (encByteCount > inDataPkt) encByteCount = inDataPkt;
 
-        // Expand to bits
-        int numBits = encodedLength * 8;
-        uint8_t* inBits = new uint8_t[numBits]();
-        for (int byte = 0; byte < encodedLength; byte++) {
+        // Convert input bytes -> bit array
+        uint8_t* inBits  = new uint8_t[encBitCount]();
+        uint8_t* outBits = new uint8_t[encBitCount]();
+
+        for (int j = 0; j < encByteCount; j++) {
+            uint8_t b = (uint8_t)((int32_t)dataBuf[dataOff + j] + 128);
             for (int bit = 0; bit < 8; bit++) {
-                inBits[byte * 8 + bit] = (pkt[byte] >> bit) & 1;  // right-MSB order
+                int idx = j * 8 + bit;
+                if (idx < encBitCount)
+                    inBits[idx] = (b >> bit) & 1;
             }
         }
 
-        uint8_t* outBits = new uint8_t[numBits]();
+        // ------------------------------------------------------------------
+        // SIGNAL field: bits 0–47 (48 bits), always BPSK (NCBPS=48, NBPSC=1)
+        // ------------------------------------------------------------------
+        const int SIGNAL_ENC_BITS = 48;
 
-        // --- SIGNAL field: first 48 bits, always BPSK (NCBPS=48, NBPSC=1) ---
-        if (numBits >= 48) {
-            interleave_block(inBits, outBits, 48, 1);
+        if (encBitCount >= SIGNAL_ENC_BITS) {
+            uint8_t sigIn[48], sigOut[48];
+            for (int b = 0; b < SIGNAL_ENC_BITS; b++) sigIn[b] = inBits[b];
+            interleave_block(sigIn, sigOut, 48, 1);
+            for (int b = 0; b < SIGNAL_ENC_BITS; b++) outBits[b] = sigOut[b];
         } else {
-            memcpy(outBits, inBits, numBits);
+            for (int b = 0; b < encBitCount; b++) outBits[b] = inBits[b];
         }
 
-        // --- DATA field: bits 48 onward, rate-dependent ---
-        if (numBits > 48) {
-            RateModParams mp = getModParams(rateVal);
-            int NCBPS = mp.NCBPS;
-            int NBPSC = mp.NBPSC;
-            int dataBitCount = numBits - 48;
-            int numSymbols = dataBitCount / NCBPS;
+        // ------------------------------------------------------------------
+        // DATA field: bits 48..encBits-1, rate-dependent NCBPS
+        // ------------------------------------------------------------------
+        RateModParams mp = getModParams(rateVal);
+        int NCBPS = mp.NCBPS, NBPSC = mp.NBPSC;
 
+        int dataBitCount = encBitCount - SIGNAL_ENC_BITS;
+        int numCompleteSymbols = (dataBitCount > 0) ? dataBitCount / NCBPS : 0;
+
+        if (dataBitCount > 0) {
             uint8_t* symIn  = new uint8_t[NCBPS];
             uint8_t* symOut = new uint8_t[NCBPS];
 
-            for (int sym = 0; sym < numSymbols; sym++) {
-                int start = 48 + sym * NCBPS;
-                memcpy(symIn, inBits + start, NCBPS);
+            for (int sym = 0; sym < numCompleteSymbols; sym++) {
+                int start = SIGNAL_ENC_BITS + sym * NCBPS;
+                for (int b = 0; b < NCBPS; b++) symIn[b] = inBits[start + b];
                 interleave_block(symIn, symOut, NCBPS, NBPSC);
-                memcpy(outBits + start, symOut, NCBPS);
+                for (int b = 0; b < NCBPS; b++) outBits[start + b] = symOut[b];
             }
 
-            // Remaining bits (partial symbol): copy unchanged
-            int processed = 48 + numSymbols * NCBPS;
-            if (processed < numBits) {
-                memcpy(outBits + processed, inBits + processed, numBits - processed);
+            // Partial last symbol (should not occur with fixed lipBits, but handle safely)
+            int processed = SIGNAL_ENC_BITS + numCompleteSymbols * NCBPS;
+            if (processed < encBitCount) {
+                int partialBits = encBitCount - processed;
+                for (int b = 0; b < partialBits; b++)  symIn[b] = inBits[processed + b];
+                for (int b = partialBits; b < NCBPS; b++) symIn[b] = 0;
+                interleave_block(symIn, symOut, NCBPS, NBPSC);
+                for (int b = 0; b < partialBits; b++) outBits[processed + b] = symOut[b];
             }
 
             delete[] symIn;
             delete[] symOut;
         }
 
-        // Pack bits back to bytes
-        uint8_t outBytes[3030] = {};
-        for (int byte = 0; byte < encodedLength; byte++) {
-            uint8_t b = 0;
+        // Pack bits -> output bytes
+        for (int byte = 0; byte < encByteCount; byte++) {
+            uint8_t bval = 0;
             for (int bit = 0; bit < 8; bit++) {
-                b |= (outBits[byte * 8 + bit] & 1) << bit;
+                int idx = byte * 8 + bit;
+                if (idx < encBitCount) bval |= (outBits[idx] & 1) << bit;
             }
-            outBytes[byte] = b;
+            dataOutBuf[outOff + byte] = (int8_t)((int32_t)bval - 128);
         }
 
-        // Convert uint8 -> int8
-        for (int j = 0; j < encodedLength; j++) {
-            dataOutBuf[outOff + j] = (int8_t)((int32_t)outBytes[j] - 128);
+        if (dbg) {
+            printf("[Interleaver] pkt[0] INPUT : signal=%d  data=%d  total=%d bits\n",
+                   SIGNAL_ENC_BITS, dataBitCount, encBitCount);
+            printf("[Interleaver] pkt[0] OUTPUT: signal=%d  data=%d  total=%d bits\n",
+                   SIGNAL_ENC_BITS, dataBitCount, encBitCount);
+            fflush(stdout);
         }
-        // Bytes [encodedLength..outDataPkt-1] remain 0 from memset
 
         delete[] inBits;
         delete[] outBits;
     }
 
-    // STEP 4: Send DATA first (rate measurement), then RATE passthrough
+
+
     outData.write(dataOutBuf, actualCount);
     outRate.write(rateOutBuf, actualCount);
-
     customData.frameCount += actualCount;
 
     delete[] dataBuf;
@@ -228,15 +231,15 @@ int main(int argc, char* argv[]) {
 
     BlockConfig config = {
         "Interleaver",
-        2,                        // inputs
-        2,                        // outputs
-        {3030, 3},                // inputPacketSizes  [ENC_DATA, rate_enc_len]
-        {64, 64},             // inputBatchSizes
-        {3030, 3},                // outputPacketSizes [INTERLEAVED_DATA, rate_enc_len]
-        {64, 64},             // outputBatchSizes
-        true,                     // ltr
-        true,                     // startWithAll
-        "IEEE 802.11a two-step interleaver: SIGNAL=BPSK, DATA=rate-dependent, RATE passthrough"
+        2,             // inputs
+        2,             // outputs
+        {3030, 5},     // inputPacketSizes  [ENC_DATA, rate_enc_len_bits(uint32 LE)]
+        {64, 64},      // inputBatchSizes
+        {3030, 5},     // outputPacketSizes [INTERLEAVED_DATA, rate_enc_len_bits(uint32 LE)]
+        {64, 64},      // outputBatchSizes
+        true,          // ltr
+        true,          // startWithAll
+        "IEEE 802.11a two-step interleaver: SIGNAL@BPSK, DATA@rate-params, exact bit counts"
     };
 
     run_manual_block(pipeIns, pipeOuts, config, process_interleaver, init_interleaver);

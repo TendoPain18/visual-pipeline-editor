@@ -3,35 +3,22 @@
 #include <cstdint>
 
 // ============================================================
-// IEEE 802.11a Deinterleaver
+// IEEE 802.11a Deinterleaver (inverse of interleaver)
 //
 // Inputs:
-//   in[0]: rate + lip + DATA_INTERLEAVED        (3027 bytes/pkt)  <- [0] rate counter
-//             Byte 0: rate_value
-//             Byte 1: lip_lo   (meaningful encoded DATA bytes, excl. SIGNAL 6B)
-//             Byte 2: lip_hi
-//             Bytes [3..3026]: interleaved DATA bits (3024 bytes)
-//   in[1]: SIGNAL_INTERLEAVED                   (6 bytes/pkt)
+//   in[0]: rate + lip_bits + DATA_INTERLEAVED  (3029 bytes/pkt)
+//   in[1]: SIGNAL_INTERLEAVED                  (6 bytes/pkt) — arrives FIRST
 //
 // Outputs:
-//   out[0]: rate + lip + DATA_DEINTERLEAVED     (3027 bytes/pkt)  <- [0] rate counter
-//             Byte 0: rate_value  (passthrough)
-//             Byte 1: lip_lo     (passthrough)
-//             Byte 2: lip_hi     (passthrough)
-//             Bytes [3..3026]: deinterleaved DATA bits (3024 bytes)
-//   out[1]: Deinterleaved SIGNAL                (6 bytes/pkt)
-//
-// lip = number of meaningful encoded DATA bytes (after stripping SIGNAL 6B).
-// Only lip bytes in [3..3+lip-1] are deinterleaved; the rest remain zero.
+//   out[0]: rate + lip_bits + DATA_DEINTERLEAVED (3029 bytes/pkt)
+//   out[1]: SIGNAL_DEINTERLEAVED                 (6 bytes/pkt)
 //
 // Protocol (deadlock-free):
-//   1. Read SIGNAL_INTERLEAVED (in[1])  -- arrives FIRST
-//   2. Deinterleave SIGNAL (BPSK, NCBPS=48), send (out[1])
-//      -> ppdu_decap reads SIGNAL, sends feedback to middleman
-//      -> middleman sends DATA to us
+//   1. Read SIGNAL (in[1]) -- arrives first
+//   2. Deinterleave + send SIGNAL (out[1])
 //   3. Read DATA (in[0])
-//   4. Read lip from header; deinterleave lip bytes with rate-dependent params
-//   5. Send rate+lip+DATA_DEINTERLEAVED (out[0])
+//   4. Deinterleave DATA for exact lip_bits
+//   5. Send rate+lip_bits+DATA_DEINT (out[0])
 // ============================================================
 
 struct RateModParams { int NBPSC; int NCBPS; };
@@ -50,6 +37,22 @@ static RateModParams getModParams(uint8_t rateVal) {
     }
 }
 
+static const char* rateNameFromVal(uint8_t rateVal) {
+    switch (rateVal) {
+        case 13: return "6 Mbps (BPSK 1/2)";
+        case 15: return "9 Mbps (BPSK 3/4)";
+        case  5: return "12 Mbps (QPSK 1/2)";
+        case  7: return "18 Mbps (QPSK 3/4)";
+        case  9: return "24 Mbps (16-QAM 1/2)";
+        case 11: return "36 Mbps (16-QAM 3/4)";
+        case  1: return "48 Mbps (64-QAM 2/3)";
+        case  3: return "54 Mbps (64-QAM 3/4)";
+        default: return "UNKNOWN";
+    }
+}
+
+// Inverse of the forward interleave:
+// Build forward map fwd[k] = j, then use it as a lookup (out[k] = in[fwd[k]])
 static void deinterleave_block(const uint8_t* bits, uint8_t* out, int NCBPS, int NBPSC) {
     int s = (NBPSC / 2 > 1) ? NBPSC / 2 : 1;
     int* fwd = new int[NCBPS];
@@ -68,18 +71,6 @@ DeinterleaverData init_deinterleaver(const BlockConfig& config) {
     DeinterleaverData data;
     data.frameCount = 0;
 
-    printf("[Deinterleaver] IEEE 802.11a two-step deinterleaver (inverse)\n");
-    printf("[Deinterleaver] in[0]: [rate(1)|lip_lo(1)|lip_hi(1)|DATA_INT(3024)] = 3027B\n");
-    printf("[Deinterleaver] out[0]: same layout, DATA deinterleaved up to lip bytes\n");
-    printf("[Deinterleaver] lip = meaningful encoded DATA bytes (excl. SIGNAL 6B)\n");
-    printf("[Deinterleaver] Protocol (deadlock-free):\n");
-    printf("[Deinterleaver]   1. Read SIGNAL_INT (in[1]) -- arrives first\n");
-    printf("[Deinterleaver]   2. Deinterleave + send SIGNAL (out[1])\n");
-    printf("[Deinterleaver]   3. Read DATA (in[0]) -- arrives after middleman gets feedback\n");
-    printf("[Deinterleaver]   4. Deinterleave DATA up to lip bytes\n");
-    printf("[Deinterleaver]   5. Send rate+lip+DATA_DEINT (out[0])\n");
-    printf("[Deinterleaver] Ready\n");
-
     return data;
 }
 
@@ -89,10 +80,10 @@ void process_deinterleaver(
     DeinterleaverData& customData,
     const BlockConfig& config
 ) {
-    PipeIO inData    (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);  // 3027
-    PipeIO inSignal  (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);  // 6
-    PipeIO outData   (pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]); // 3027
-    PipeIO outSignal (pipeOut[1], config.outputPacketSizes[1], config.outputBatchSizes[1]); // 6
+    PipeIO inData   (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);  // 3029
+    PipeIO inSignal (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);  // 6
+    PipeIO outData  (pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]); // 3029
+    PipeIO outSignal(pipeOut[1], config.outputPacketSizes[1], config.outputBatchSizes[1]); // 6
 
     int8_t* signalBuf  = new int8_t[inSignal.getBufferSize()];
     int8_t* dataBuf    = new int8_t[inData.getBufferSize()];
@@ -100,17 +91,19 @@ void process_deinterleaver(
     int8_t* dataOutBuf = new int8_t[outData.getBufferSize()];
 
     const int inSigPkt   = config.inputPacketSizes[1];   // 6
-    const int inDataPkt  = config.inputPacketSizes[0];   // 3027
+    const int inDataPkt  = config.inputPacketSizes[0];   // 3029
     const int outSigPkt  = config.outputPacketSizes[1];  // 6
-    const int outDataPkt = config.outputPacketSizes[0];  // 3027
+    const int outDataPkt = config.outputPacketSizes[0];  // 3029
 
-    // ===== STEP 1: Read SIGNAL_INTERLEAVED -- arrives first =====
+    const bool isFirstBatch = (customData.frameCount == 0);
+
+    // STEP 1: Read SIGNAL -- arrives first
     int actualCount = inSignal.read(signalBuf);
 
     memset(sigOutBuf,  0, outSignal.getBufferSize());
     memset(dataOutBuf, 0, outData.getBufferSize());
 
-    // ===== STEP 2: Deinterleave SIGNAL and send immediately =====
+    // STEP 2: Deinterleave SIGNAL (BPSK, NCBPS=48) and send immediately
     for (int i = 0; i < actualCount; i++) {
         const int sigOff    = i * inSigPkt;
         const int sigOutOff = i * outSigPkt;
@@ -135,76 +128,99 @@ void process_deinterleaver(
             sigOutBuf[sigOutOff + j] = (int8_t)((int32_t)outBytes[j] - 128);
     }
 
-    // Send SIGNAL -- ppdu_decap parses it, sends feedback, middleman sends DATA
+    // STEP 3: Send SIGNAL -- ppdu_decap parses it, sends feedback
     outSignal.write(sigOutBuf, actualCount);
 
-    // ===== STEP 3: Read DATA -- arrives after middleman gets feedback =====
+    // STEP 4: Read DATA -- arrives after middleman gets feedback
     inData.read(dataBuf);
 
-    // ===== STEP 4+5: Deinterleave DATA for each packet =====
+
+
+    // STEP 5+6: Deinterleave DATA for each packet
     for (int i = 0; i < actualCount; i++) {
+        const bool dbg = isFirstBatch && (i == 0);
+
         const int dataOff    = i * inDataPkt;
         const int dataOutOff = i * outDataPkt;
 
-        // Read header
+        // Read header: rate(1) + lip_bits(4B LE) - EXACT bits
         uint8_t rateVal = (uint8_t)((int32_t)dataBuf[dataOff + 0] + 128);
-        uint8_t lipLo   = (uint8_t)((int32_t)dataBuf[dataOff + 1] + 128);
-        uint8_t lipHi   = (uint8_t)((int32_t)dataBuf[dataOff + 2] + 128);
-        int lip = (int)lipLo | ((int)lipHi << 8);
-        if (lip > 3024) lip = 3024;   // cap at available DATA bytes
+        uint8_t b1      = (uint8_t)((int32_t)dataBuf[dataOff + 1] + 128);
+        uint8_t b2      = (uint8_t)((int32_t)dataBuf[dataOff + 2] + 128);
+        uint8_t b3      = (uint8_t)((int32_t)dataBuf[dataOff + 3] + 128);
+        uint8_t b4      = (uint8_t)((int32_t)dataBuf[dataOff + 4] + 128);
+        uint32_t lipBits = (uint32_t)b1 | ((uint32_t)b2 << 8)
+                         | ((uint32_t)b3 << 16) | ((uint32_t)b4 << 24);
 
-        // Passthrough header to output unchanged
-        dataOutBuf[dataOutOff + 0] = dataBuf[dataOff + 0];
-        dataOutBuf[dataOutOff + 1] = dataBuf[dataOff + 1];
-        dataOutBuf[dataOutOff + 2] = dataBuf[dataOff + 2];
+        int lipBitCount  = (int)lipBits;  // EXACT bits
+        int lipByteCount = (lipBitCount + 7) / 8;
+        if (lipByteCount > 3024) lipByteCount = 3024;
 
-        // Convert lip DATA bytes to uint8 (from offset 3 in packet)
+        // Passthrough header (5 bytes)
+        for (int j = 0; j < 5; j++)
+            dataOutBuf[dataOutOff + j] = dataBuf[dataOff + j];
+
+        // Read DATA bytes into uint8 (data starts at offset 5)
         uint8_t dataBytes[3024] = {};
-        for (int j = 0; j < lip; j++)
-            dataBytes[j] = (uint8_t)((int32_t)dataBuf[dataOff + 3 + j] + 128);
+        for (int j = 0; j < lipByteCount; j++)
+            dataBytes[j] = (uint8_t)((int32_t)dataBuf[dataOff + 5 + j] + 128);
 
         RateModParams mp = getModParams(rateVal);
-        int NCBPS = mp.NCBPS;
-        int NBPSC = mp.NBPSC;
+        int NCBPS = mp.NCBPS, NBPSC = mp.NBPSC;
 
-        // Expand to bits, deinterleave symbol by symbol
-        int numBits = lip * 8;
-        uint8_t* inBits  = new uint8_t[numBits]();
-        uint8_t* outBits = new uint8_t[numBits]();
+        uint8_t* inBits  = new uint8_t[lipBitCount]();
+        uint8_t* outBits = new uint8_t[lipBitCount]();
 
-        for (int byte = 0; byte < lip; byte++)
-            for (int bit = 0; bit < 8; bit++)
-                inBits[byte * 8 + bit] = (dataBytes[byte] >> bit) & 1;
+        for (int bit = 0; bit < lipBitCount; bit++)
+            inBits[bit] = (dataBytes[bit / 8] >> (bit % 8)) & 1;
 
-        int numSymbols = numBits / NCBPS;
+        int numCompleteSymbols = lipBitCount / NCBPS;
         uint8_t* symIn  = new uint8_t[NCBPS];
         uint8_t* symOut = new uint8_t[NCBPS];
 
-        for (int sym = 0; sym < numSymbols; sym++) {
+        for (int sym = 0; sym < numCompleteSymbols; sym++) {
             int start = sym * NCBPS;
-            memcpy(symIn, inBits + start, NCBPS);
+            for (int b = 0; b < NCBPS; b++) symIn[b] = inBits[start + b];
             deinterleave_block(symIn, symOut, NCBPS, NBPSC);
-            memcpy(outBits + start, symOut, NCBPS);
+            for (int b = 0; b < NCBPS; b++) outBits[start + b] = symOut[b];
         }
-        // Remaining bits (partial symbol): copy unchanged
-        int processed = numSymbols * NCBPS;
-        if (processed < numBits)
-            memcpy(outBits + processed, inBits + processed, numBits - processed);
 
-        // Pack bits back to bytes, write to out[0] at offset 3
-        for (int byte = 0; byte < lip; byte++) {
-            uint8_t b = 0;
-            for (int bit = 0; bit < 8; bit++)
-                b |= (outBits[byte * 8 + bit] & 1) << bit;
-            dataOutBuf[dataOutOff + 3 + byte] = (int8_t)((int32_t)b - 128);
+        // Partial last symbol
+        int processed = numCompleteSymbols * NCBPS;
+        if (processed < lipBitCount) {
+            int partialBits = lipBitCount - processed;
+            for (int b = 0; b < partialBits; b++) symIn[b] = inBits[processed + b];
+            for (int b = partialBits; b < NCBPS; b++) symIn[b] = 0;
+            deinterleave_block(symIn, symOut, NCBPS, NBPSC);
+            for (int b = 0; b < partialBits; b++) outBits[processed + b] = symOut[b];
         }
-        // bytes [3+lip..] remain 0 from memset
+
+        // Pack bits -> bytes at offset 5
+        for (int byte = 0; byte < lipByteCount; byte++) {
+            uint8_t bval = 0;
+            for (int bit = 0; bit < 8; bit++) {
+                int idx = byte * 8 + bit;
+                if (idx < lipBitCount) bval |= (outBits[idx] & 1) << bit;
+            }
+            dataOutBuf[dataOutOff + 5 + byte] = (int8_t)((int32_t)bval - 128);
+        }
+
+        if (dbg) {
+            int dataEncBits = lipBitCount - 48;
+            printf("[Deinterleaver] pkt[0] INPUT : signal=48  data=%d  total=%d bits\n",
+                   dataEncBits, lipBitCount);
+            printf("[Deinterleaver] pkt[0] OUTPUT: signal=48  data=%d  total=%d bits\n",
+                   dataEncBits, lipBitCount);
+            fflush(stdout);
+        }
 
         delete[] inBits;
         delete[] outBits;
         delete[] symIn;
         delete[] symOut;
     }
+
+
 
     outData.write(dataOutBuf, actualCount);
     customData.frameCount += actualCount;
@@ -218,7 +234,8 @@ void process_deinterleaver(
 int main(int argc, char* argv[]) {
     if (argc < 5) {
         fprintf(stderr,
-            "Usage: deinterleaver <pipeInData> <pipeInSignal> <pipeOutData> <pipeOutSignal>\n");
+            "Usage: deinterleaver <pipeInData> <pipeInSignal>"
+            " <pipeOutData> <pipeOutSignal>\n");
         return 1;
     }
 
@@ -229,13 +246,13 @@ int main(int argc, char* argv[]) {
         "Deinterleaver",
         2,                 // inputs
         2,                 // outputs
-        {3027, 6},         // inputPacketSizes  [rate+lip+DATA_INT(3027), SIGNAL_INT(6)]
-        {64, 64},      // inputBatchSizes
-        {3027, 6},         // outputPacketSizes [rate+lip+DATA_DEINT(3027), SIGNAL(6)]
-        {64, 64},      // outputBatchSizes
+        {3029, 6},         // inputPacketSizes  [rate+lip_bits(uint32 LE)+DATA_INT(3024)=3029, SIGNAL_INT(6)]
+        {64, 64},          // inputBatchSizes
+        {3029, 6},         // outputPacketSizes [rate+lip_bits(uint32 LE)+DATA_DEINT(3024)=3029, SIGNAL(6)]
+        {64, 64},          // outputBatchSizes
         true,              // ltr
         true,              // startWithAll
-        "Deinterleaver: SIGNAL deint+sent first; DATA deint up to lip bytes; rate+lip passed through"
+        "Deinterleaver: exact bit counts (including fractional bytes)"
     };
 
     run_manual_block(pipeIns, pipeOuts, config, process_deinterleaver, init_deinterleaver);

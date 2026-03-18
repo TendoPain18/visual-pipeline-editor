@@ -470,8 +470,6 @@ struct GpuBufs {
         tH2D = tKernel = tD2H = 0.0f;
         QueryPerformanceFrequency(&tFreq);
 
-        printf("[ChannelDecode] Survivors buffer (bit-packed): %.1f MB on GPU\n",
-               survBytes / 1e6);
     }
 
     void free_all() {
@@ -531,14 +529,9 @@ ChannelDecodeData init_channel_decode(const BlockConfig& config) {
     }
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
-    printf("[ChannelDecode] GPU: %s  SM: %d.%d  Mem: %.0f MB\n",
-           prop.name, prop.major, prop.minor,
-           prop.totalGlobalMem / 1e6);
+    printf("[ChannelDecode] GPU: %s\n", prop.name);
 
-    // Detect OpenMP thread count
     int nThreads = omp_get_max_threads();
-    printf("[ChannelDecode] OpenMP depuncture threads: %d\n", nThreads);
-
     int batchSize = config.inputBatchSizes[0];
     int sigInSz   = (config.inputPacketSizes[1]  * batchSize) + 4;
     int dataInSz  = (config.inputPacketSizes[0]  * batchSize) + 4;
@@ -552,8 +545,6 @@ ChannelDecodeData init_channel_decode(const BlockConfig& config) {
     data.gpuBufs->alloc(batchSize, DEC_BITS_MAX, nThreads,
                         sigInSz, dataInSz, sigOutSz, dataOutSz);
 
-    printf("[ChannelDecode] GPU Viterbi ready: %d packets/batch, %d max pairs/pkt\n",
-           batchSize, DEC_BITS_MAX);
     return data;
 }
 
@@ -597,7 +588,7 @@ void process_channel_decode(
     // Reset per-batch scratch (replaces new int[...]() zero-init)
     for (int i = 0; i < actualCount; i++) {
         lipArr[i]    = 1515;
-        encLipArr[i] = inDataPkt - 3;
+        encLipArr[i] = inDataPkt - 5;   // 5-byte header: rate(1) + lip_bits(4)
         errorArr[i]  = 0;
     }
 
@@ -657,14 +648,56 @@ void process_channel_decode(
     // ===== STEP 4: Read rate+lip+DATA =====
     inData.read(dataInBuf);
 
+    // Header: [rate(1B) | lip_bits(4B uint32 LE) | DATA_ENC(3024B)]
+    // lip_bits = exact DATA encoded bit count (= encLenBits - 48 from interleaver middleman)
     for (int i = 0; i < actualCount; i++) {
         const int off = i * inDataPkt;
-        uint8_t lo = (uint8_t)((int32_t)dataInBuf[off + 1] + 128);
-        uint8_t hi = (uint8_t)((int32_t)dataInBuf[off + 2] + 128);
-        int encLip = (int)lo | ((int)hi << 8);
+        uint8_t b1 = (uint8_t)((int32_t)dataInBuf[off + 1] + 128);
+        uint8_t b2 = (uint8_t)((int32_t)dataInBuf[off + 2] + 128);
+        uint8_t b3 = (uint8_t)((int32_t)dataInBuf[off + 3] + 128);
+        uint8_t b4 = (uint8_t)((int32_t)dataInBuf[off + 4] + 128);
+        uint32_t lipBitsField = (uint32_t)b1 | ((uint32_t)b2 << 8)
+                              | ((uint32_t)b3 << 16) | ((uint32_t)b4 << 24);
+        int encLip = (int)((lipBitsField + 7u) / 8u);  // exact bits → bytes
         if (encLip < 0)              encLip = 0;
-        if (encLip > inDataPkt - 3) encLip = inDataPkt - 3;
+        if (encLip > inDataPkt - 5) encLip = inDataPkt - 5;
         encLipArr[i] = encLip;
+    }
+
+    if (customData.frameCount == 0 && actualCount > 0) {
+        int encTotalIn  = encLipArr[0] * 8;      // already = signal(48) + data
+        int encDataBits = encTotalIn - 48;        // strip signal for display
+        uint32_t lipBitsOut = 0;
+        {
+            // Reconstruct lipBitsOut from signal decoded above
+            const int sigOutOff0 = 0;
+            uint8_t ds0 = (uint8_t)((int32_t)sigOutBuf[sigOutOff0 + 0] + 128);
+            uint8_t ds1 = (uint8_t)((int32_t)sigOutBuf[sigOutOff0 + 1] + 128);
+            uint8_t ds2 = (uint8_t)((int32_t)sigOutBuf[sigOutOff0 + 2] + 128);
+            uint8_t rv2 = ds0 & 0x0F;
+            uint16_t len2 = (uint16_t)((ds0 >> 5) & 0x07)
+                          | ((uint16_t)ds1 << 3)
+                          | (((uint16_t)(ds2 & 0x01)) << 11);
+            if (len2 == 0 || len2 > 4095) len2 = 1504;
+            int ndbps2 = 48;
+            switch (rv2) {
+                case 13: ndbps2 =  24; break; case 15: ndbps2 =  36; break;
+                case  5: ndbps2 =  48; break; case  7: ndbps2 =  72; break;
+                case  9: ndbps2 =  96; break; case 11: ndbps2 = 144; break;
+                case  1: ndbps2 = 192; break; case  3: ndbps2 = 216; break;
+            }
+            uint32_t db2 = 16u + (uint32_t)len2 * 8u + 6u;
+            uint32_t ns2 = (db2 + (uint32_t)ndbps2 - 1u) / (uint32_t)ndbps2;
+            uint32_t pb2 = ns2 * (uint32_t)ndbps2 - db2;
+            lipBitsOut   = 24u + db2 + pb2;
+        }
+        int outputSignalBits = 24;
+        int outputDataBits   = (int)lipBitsOut - 24;
+        printf("[ChannelDecode] pkt[0] INPUT : signal=48  data=%d  total=%d bits\n",
+               encDataBits, encTotalIn);
+        printf("[ChannelDecode] pkt[0] OUTPUT: signal=%d  data=%d  total=%u bits\n",
+               outputSignalBits, outputDataBits, lipBitsOut);
+        fflush(stdout);
     }
 
     // ===== STEP 5: Single-pass depuncture — build compact pairs buffer =====
@@ -691,7 +724,7 @@ void process_channel_decode(
 
         uint8_t encRaw[3024];
         for (int j = 0; j < encDataBytes; j++)
-            encRaw[j] = (uint8_t)((int32_t)dataInBuf[off + 3 + j] + 128);
+            encRaw[j] = (uint8_t)((int32_t)dataInBuf[off + 5 + j] + 128);  // 5-byte header
 
         int numPairs = depuncture_to_int8(encRaw, numEncBits, slot, rateCode);
         if (numPairs > gpu.maxPairs) { numPairs = gpu.maxPairs; errorArr[i] = 1; }
@@ -779,30 +812,61 @@ void process_channel_decode(
     }
 
     // ===== STEP 7: Pack decoded bits -> output buffer (parallel) =====
+    // Output layout: [lipBits_uint32_LE(4B) | SIGNAL(3B) | SERVICE(2B) | DATA...] = 1519B
+    // lipBits = exact PPDU frame bits, reconstructed from decoded SIGNAL using 802.11a formula
     #pragma omp parallel for schedule(static) num_threads(gpu.numOmpThreads)
     for (int i = 0; i < actualCount; i++) {
         const int  dataOutOff = i * outDataPkt;
-        const int  frameLip   = lipArr[i];
+        const int  frameLip   = lipArr[i];    // byte count: SIGNAL+SERVICE+PSDU+TAILPAD
         const int8_t* decBits = gpu.h_decBits + gpu.h_decOffsets[i];  // compacted
 
-        int numDecBytes = frameLip;
-        if (numDecBytes > outDataPkt - 2) numDecBytes = outDataPkt - 2;
-
-        uint8_t decBytes[1517] = {};
-
+        // Reconstruct exact lipBits from decoded SIGNAL (same formula as ppdu_encapsulate)
         const int sigOutOff = i * outSigPkt;
-        for (int j = 0; j < 3 && j < numDecBytes; j++)
-            decBytes[j] = (uint8_t)((int32_t)sigOutBuf[sigOutOff + j] + 128);
+        uint8_t ds0 = (uint8_t)((int32_t)sigOutBuf[sigOutOff + 0] + 128);
+        uint8_t ds1 = (uint8_t)((int32_t)sigOutBuf[sigOutOff + 1] + 128);
+        uint8_t ds2 = (uint8_t)((int32_t)sigOutBuf[sigOutOff + 2] + 128);
+
+        uint8_t  rv2    = ds0 & 0x0F;
+        uint16_t len2   = (uint16_t)((ds0 >> 5) & 0x07)
+                        | ((uint16_t)ds1 << 3)
+                        | (((uint16_t)(ds2 & 0x01)) << 11);
+        if (len2 == 0 || len2 > 4095) len2 = 1504;
+
+        int ndbps2 = 48;
+        switch (rv2) {
+            case 13: ndbps2 =  24; break; case 15: ndbps2 =  36; break;
+            case  5: ndbps2 =  48; break; case  7: ndbps2 =  72; break;
+            case  9: ndbps2 =  96; break; case 11: ndbps2 = 144; break;
+            case  1: ndbps2 = 192; break; case  3: ndbps2 = 216; break;
+        }
+        uint32_t dbits2   = 16u + (uint32_t)len2 * 8u + 6u;
+        uint32_t nsym2    = (dbits2 + (uint32_t)ndbps2 - 1u) / (uint32_t)ndbps2;
+        uint32_t padbits2 = nsym2 * (uint32_t)ndbps2 - dbits2;
+        uint32_t lipBitsOut = 24u + dbits2 + padbits2;
+        int      lipByteOut = (int)((lipBitsOut + 7u) / 8u);
+        if (lipByteOut > 1515) lipByteOut = 1515;
+        if (lipByteOut < 5)    lipByteOut = 5;
+
+        int numDecBytes = lipByteOut;
+        if (numDecBytes > outDataPkt - 4) numDecBytes = outDataPkt - 4;
+
+        uint8_t decBytes[1515] = {};
+        if (numDecBytes >= 1) decBytes[0] = ds0;
+        if (numDecBytes >= 2) decBytes[1] = ds1;
+        if (numDecBytes >= 3) decBytes[2] = ds2;
 
         int dfc = frameLip - 3;
         if (dfc < 0) dfc = 0;
-        if (dfc > outDataPkt - 2 - 3) dfc = outDataPkt - 2 - 3;
-        pack_decbits_to_bytes(decBits, dfc * 8, decBytes + 3, dfc);
+        if (dfc > numDecBytes - 3) dfc = numDecBytes - 3;
+        if (dfc > 0) pack_decbits_to_bytes(decBits, dfc * 8, decBytes + 3, dfc);
 
-        dataOutBuf[dataOutOff + 0] = (int8_t)((int32_t)(frameLip & 0xFF)        - 128);
-        dataOutBuf[dataOutOff + 1] = (int8_t)((int32_t)((frameLip >> 8) & 0xFF) - 128);
+        // Write 4-byte lipBits header (uint32 LE) then decoded PPDU bytes
+        dataOutBuf[dataOutOff + 0] = (int8_t)((int32_t)( lipBitsOut        & 0xFF) - 128);
+        dataOutBuf[dataOutOff + 1] = (int8_t)((int32_t)((lipBitsOut >>  8) & 0xFF) - 128);
+        dataOutBuf[dataOutOff + 2] = (int8_t)((int32_t)((lipBitsOut >> 16) & 0xFF) - 128);
+        dataOutBuf[dataOutOff + 3] = (int8_t)((int32_t)((lipBitsOut >> 24) & 0xFF) - 128);
         for (int j = 0; j < numDecBytes; j++)
-            dataOutBuf[dataOutOff + 2 + j] = (int8_t)((int32_t)decBytes[j] - 128);
+            dataOutBuf[dataOutOff + 4 + j] = (int8_t)((int32_t)decBytes[j] - 128);
     }
 
     // ===== STEP 8: Send DATA =====
@@ -835,9 +899,9 @@ int main(int argc, char* argv[]) {
         "ChannelDecode",
         2,               // inputs
         2,               // outputs
-        {3027, 6},       // inputPacketSizes  [rate+lip+DATA_DEINT(3027), SIGNAL_ENC(6)]
+        {3029, 6},       // inputPacketSizes  [rate+lip_bits(uint32 LE)+DATA_INT(3024)=3029, SIGNAL_INT(6)]
         {64, 64},    // inputBatchSizes
-        {1517, 3},       // outputPacketSizes [lip+DATA(1517), SIGNAL(3)]
+        {1519, 3},       // outputPacketSizes [lipBits(uint32 LE)+DATA(1515)=1519, SIGNAL(3)]
         {64, 64},    // outputBatchSizes
         true,            // ltr
         true,            // startWithAll

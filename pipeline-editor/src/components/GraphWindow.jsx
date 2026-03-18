@@ -1,15 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
-export const GraphWindow = ({ blockId, blockName, graphType, data, onClose, maxPoints = 15000 }) => {
+export const GraphWindow = ({ blockId, blockName, graphType, data, onClose }) => {
   const canvasRef = useRef(null);
   const [position, setPosition] = useState({ x: 100, y: 100 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  
-  // Rolling buffer for on-the-fly plotting
-  const pointBufferRef = useRef([]);
-  const bufferIndexRef = useRef(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -19,14 +15,14 @@ export const GraphWindow = ({ blockId, blockName, graphType, data, onClose, maxP
     const width = canvas.width;
     const height = canvas.height;
 
-    // Clear canvas
+    // Clear canvas on every render — this erases the previous batch
     ctx.clearRect(0, 0, width, height);
 
     // Draw background
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
 
-    // Draw grid
+    // Draw light grid
     ctx.strokeStyle = '#f0f0f0';
     ctx.lineWidth = 1;
     for (let x = 0; x <= width; x += 40) {
@@ -55,175 +51,139 @@ export const GraphWindow = ({ blockId, blockName, graphType, data, onClose, maxP
     const plotWidth = width - padding.left - padding.right;
     const plotHeight = height - padding.top - padding.bottom;
 
-    // Different rendering for scatter (constellation) vs line plots
     if (graphType === 'scatter') {
-      // CONSTELLATION DIAGRAM - centered axes at (0,0)
-      // ON-THE-FLY PLOTTING with rolling window
-      
-      // Add new points to rolling buffer
-      for (let i = 0; i < data.xData.length; i++) {
-        const newPoint = { x: data.xData[i], y: data.yData[i] };
-        
-        if (pointBufferRef.current.length < maxPoints) {
-          // Buffer not full - just append
-          pointBufferRef.current.push(newPoint);
-        } else {
-          // Buffer full - replace oldest (circular buffer)
-          pointBufferRef.current[bufferIndexRef.current] = newPoint;
-          bufferIndexRef.current = (bufferIndexRef.current + 1) % maxPoints;
-        }
+      // ----------------------------------------------------------------
+      // CONSTELLATION DIAGRAM
+      // Draws all points in data.xData / data.yData as-is.
+      // The parent (App.jsx) REPLACES the arrays each batch — no
+      // accumulation happens here, and there is no maxPoints cap.
+      // ----------------------------------------------------------------
+
+      const points = data.xData.map((x, i) => ({ x, y: data.yData[i] }));
+
+      // Find max absolute value for symmetric axes.
+      // Do NOT use Math.max(...largeArray) — spread blows the JS call stack
+      // when the batch contains tens of thousands of points.
+      let maxAbs = 0;
+      for (let i = 0; i < points.length; i++) {
+        const ax = Math.abs(points[i].x);
+        const ay = Math.abs(points[i].y);
+        if (ax > maxAbs) maxAbs = ax;
+        if (ay > maxAbs) maxAbs = ay;
       }
-      
-      // Use buffered points for rendering
-      const points = pointBufferRef.current;
-      
-      if (points.length === 0) {
-        ctx.fillStyle = '#666';
-        ctx.font = '16px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Accumulating points...', width / 2, height / 2);
-        return;
-      }
-      
-      // Find max absolute value for symmetric axes
-      const maxAbsX = Math.max(...points.map(p => Math.abs(p.x)));
-      const maxAbsY = Math.max(...points.map(p => Math.abs(p.y)));
-      const maxAbs = Math.max(maxAbsX, maxAbsY) || 1;
-      
-      // Add 10% padding
+      if (maxAbs === 0) maxAbs = 1;
       const axisRange = maxAbs * 1.5;
-      
+
       // Center of plot area
       const centerX = padding.left + plotWidth / 2;
       const centerY = padding.top + plotHeight / 2;
-      
-      // Scale factor: pixels per unit
+
+      // Scale: pixels per unit
       const scale = Math.min(plotWidth, plotHeight) / (2 * axisRange);
-      
+
       const xScale = (x) => centerX + x * scale;
       const yScale = (y) => centerY - y * scale;
-      
-      // Draw grid lines
+
+      // Grid lines
       ctx.strokeStyle = '#e0e0e0';
       ctx.lineWidth = 1;
       const gridStep = axisRange / 5;
-      
       for (let i = -5; i <= 5; i++) {
         const val = i * gridStep;
-        const screenX = xScale(val);
-        const screenY = yScale(val);
-        
-        // Vertical grid lines
         ctx.beginPath();
-        ctx.moveTo(screenX, padding.top);
-        ctx.lineTo(screenX, height - padding.bottom);
+        ctx.moveTo(xScale(val), padding.top);
+        ctx.lineTo(xScale(val), height - padding.bottom);
         ctx.stroke();
-        
-        // Horizontal grid lines
         ctx.beginPath();
-        ctx.moveTo(padding.left, screenY);
-        ctx.lineTo(width - padding.right, screenY);
+        ctx.moveTo(padding.left, yScale(val));
+        ctx.lineTo(width - padding.right, yScale(val));
         ctx.stroke();
       }
-      
-      // Draw CENTER axes (I and Q)
+
+      // Center axes
       ctx.strokeStyle = '#333';
       ctx.lineWidth = 2;
-      
-      // Horizontal axis (I-axis)
       ctx.beginPath();
       ctx.moveTo(padding.left, centerY);
       ctx.lineTo(width - padding.right, centerY);
       ctx.stroke();
-      
-      // Vertical axis (Q-axis)
       ctx.beginPath();
       ctx.moveTo(centerX, padding.top);
       ctx.lineTo(centerX, height - padding.bottom);
       ctx.stroke();
-      
-      // Draw axis labels
+
+      // Axis labels
       ctx.fillStyle = '#333';
       ctx.font = '12px sans-serif';
       ctx.textAlign = 'center';
-      
-      // I-axis label (bottom)
       ctx.fillText('In-phase (I)', width / 2, height - 10);
-      
-      // Q-axis label (left side, rotated)
       ctx.save();
       ctx.translate(15, height / 2);
       ctx.rotate(-Math.PI / 2);
       ctx.fillText('Quadrature (Q)', 0, 0);
       ctx.restore();
-      
-      // Draw tick marks and values
+
+      // Tick marks and values
       ctx.font = '10px sans-serif';
-      
       for (let i = -5; i <= 5; i++) {
+        if (i === 0) continue;
         const val = i * gridStep;
-        const screenX = xScale(val);
-        const screenY = yScale(val);
-        
-        // Skip center ticks (would overlap with axes)
-        if (i !== 0) {
-          // X-axis ticks
-          ctx.strokeStyle = '#333';
-          ctx.beginPath();
-          ctx.moveTo(screenX, centerY - 5);
-          ctx.lineTo(screenX, centerY + 5);
-          ctx.stroke();
-          
-          ctx.fillStyle = '#333';
-          ctx.textAlign = 'center';
-          ctx.fillText(val.toFixed(1), screenX, centerY + 18);
-          
-          // Y-axis ticks
-          ctx.strokeStyle = '#333';
-          ctx.beginPath();
-          ctx.moveTo(centerX - 5, screenY);
-          ctx.lineTo(centerX + 5, screenY);
-          ctx.stroke();
-          
-          ctx.fillStyle = '#333';
-          ctx.textAlign = 'right';
-          ctx.fillText(val.toFixed(1), centerX - 8, screenY + 4);
-        }
+
+        // X-axis ticks
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(xScale(val), centerY - 5);
+        ctx.lineTo(xScale(val), centerY + 5);
+        ctx.stroke();
+        ctx.fillStyle = '#333';
+        ctx.textAlign = 'center';
+        ctx.fillText(val.toFixed(1), xScale(val), centerY + 18);
+
+        // Y-axis ticks
+        ctx.beginPath();
+        ctx.moveTo(centerX - 5, yScale(val));
+        ctx.lineTo(centerX + 5, yScale(val));
+        ctx.stroke();
+        ctx.textAlign = 'right';
+        ctx.fillText(val.toFixed(1), centerX - 8, yScale(val) + 4);
       }
-      
-      // Draw origin marker
+
+      // Origin marker
       ctx.fillStyle = '#333';
       ctx.beginPath();
       ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
       ctx.fill();
-      
-      // Draw constellation points from rolling buffer
+
+      // Draw all points — no cap, no rolling window
       ctx.fillStyle = 'rgba(59, 130, 246, 0.6)';
-      points.forEach(point => {
-        const screenX = xScale(point.x);
-        const screenY = yScale(point.y);
-        
+      for (let i = 0; i < points.length; i++) {
+        const screenX = xScale(points[i].x);
+        const screenY = yScale(points[i].y);
         ctx.beginPath();
         ctx.arc(screenX, screenY, 2, 0, Math.PI * 2);
         ctx.fill();
-      });
-      
-      // Draw info text
+      }
+
+      // Info text
       ctx.fillStyle = '#666';
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(`Points: ${points.length}/${maxPoints}`, width - 10, 25);
-      
-    } else if (graphType === 'line') {
-      // LINE PLOT - traditional axes at bottom/left
-      
-      // Find data ranges
-      const xMin = Math.min(...data.xData);
-      const xMax = Math.max(...data.xData);
-      const yMin = Math.min(...data.yData);
-      const yMax = Math.max(...data.yData);
+      ctx.fillText(`Points: ${points.length}`, width - 10, 25);
 
-      // Add padding to ranges
+    } else if (graphType === 'line') {
+      // LINE PLOT — unchanged from original
+      let xMin = data.xData[0], xMax = data.xData[0];
+      let yMin = data.yData[0], yMax = data.yData[0];
+      for (let i = 1; i < data.xData.length; i++) {
+        if (data.xData[i] < xMin) xMin = data.xData[i];
+        if (data.xData[i] > xMax) xMax = data.xData[i];
+      }
+      for (let i = 1; i < data.yData.length; i++) {
+        if (data.yData[i] < yMin) yMin = data.yData[i];
+        if (data.yData[i] > yMax) yMax = data.yData[i];
+      }
+
       const xRange = xMax - xMin || 1;
       const yRange = yMax - yMin || 1;
       const xPadding = xRange * 0.1;
@@ -232,77 +192,61 @@ export const GraphWindow = ({ blockId, blockName, graphType, data, onClose, maxP
       const xScale = (x) => padding.left + ((x - (xMin - xPadding)) / (xRange + 2 * xPadding)) * plotWidth;
       const yScale = (y) => height - padding.bottom - ((y - (yMin - yPadding)) / (yRange + 2 * yPadding)) * plotHeight;
 
-      // Draw axes
+      // Axes
       ctx.strokeStyle = '#333';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(padding.left, height - padding.bottom);
       ctx.lineTo(width - padding.right, height - padding.bottom);
       ctx.stroke();
-
       ctx.beginPath();
       ctx.moveTo(padding.left, padding.top);
       ctx.lineTo(padding.left, height - padding.bottom);
       ctx.stroke();
 
-      // Draw axis labels
+      // Axis labels
       ctx.fillStyle = '#333';
       ctx.font = '12px sans-serif';
       ctx.textAlign = 'center';
-      
-      // X-axis label
       ctx.fillText('Time (samples)', width / 2, height - 10);
-      
-      // Y-axis label
       ctx.save();
       ctx.translate(15, height / 2);
       ctx.rotate(-Math.PI / 2);
       ctx.fillText('Speed (rad/s)', 0, 0);
       ctx.restore();
 
-      // Draw tick marks and values
+      // Ticks
       ctx.font = '10px sans-serif';
       const numTicks = 5;
-      
-      // X-axis ticks
       for (let i = 0; i <= numTicks; i++) {
         const x = xMin - xPadding + ((xRange + 2 * xPadding) * i) / numTicks;
         const screenX = xScale(x);
-        
         ctx.strokeStyle = '#333';
         ctx.beginPath();
         ctx.moveTo(screenX, height - padding.bottom);
         ctx.lineTo(screenX, height - padding.bottom + 5);
         ctx.stroke();
-        
         ctx.fillStyle = '#333';
         ctx.textAlign = 'center';
         ctx.fillText(x.toFixed(0), screenX, height - padding.bottom + 18);
       }
-
-      // Y-axis ticks
       for (let i = 0; i <= numTicks; i++) {
         const y = yMin - yPadding + ((yRange + 2 * yPadding) * i) / numTicks;
         const screenY = yScale(y);
-        
         ctx.strokeStyle = '#333';
         ctx.beginPath();
         ctx.moveTo(padding.left - 5, screenY);
         ctx.lineTo(padding.left, screenY);
         ctx.stroke();
-        
         ctx.fillStyle = '#333';
         ctx.textAlign = 'right';
         ctx.fillText(y.toFixed(1), padding.left - 8, screenY + 4);
       }
-      
-      // Draw line plot with TWO series (reference and measured)
+
+      // Two series
       const combined = data.xData.map((x, i) => ({ x, y: data.yData[i] }));
-      
-      // Separate into reference and measured based on x value pattern
       const refData = [];
       const measData = [];
-      
       combined.forEach(point => {
         if (Math.abs(point.x - Math.round(point.x)) < 0.01) {
           refData.push(point);
@@ -310,56 +254,40 @@ export const GraphWindow = ({ blockId, blockName, graphType, data, onClose, maxP
           measData.push({ x: Math.round(point.x - 0.1), y: point.y });
         }
       });
-      
-      // Draw reference speed (blue line)
+
       if (refData.length > 0) {
         ctx.strokeStyle = '#3b82f6';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        
         refData.forEach((point, i) => {
-          const screenX = xScale(point.x);
-          const screenY = yScale(point.y);
-          
-          if (i === 0) {
-            ctx.moveTo(screenX, screenY);
-          } else {
-            ctx.lineTo(screenX, screenY);
-          }
+          const sx = xScale(point.x);
+          const sy = yScale(point.y);
+          i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
         });
         ctx.stroke();
       }
-      
-      // Draw measured speed (green line)
+
       if (measData.length > 0) {
         ctx.strokeStyle = '#10b981';
         ctx.lineWidth = 2;
         ctx.setLineDash([5, 3]);
         ctx.beginPath();
-        
         measData.forEach((point, i) => {
-          const screenX = xScale(point.x);
-          const screenY = yScale(point.y);
-          
-          if (i === 0) {
-            ctx.moveTo(screenX, screenY);
-          } else {
-            ctx.lineTo(screenX, screenY);
-          }
+          const sx = xScale(point.x);
+          const sy = yScale(point.y);
+          i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
         });
         ctx.stroke();
         ctx.setLineDash([]);
       }
-      
-      // Draw legend
+
+      // Legend
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'left';
-      
       ctx.fillStyle = '#3b82f6';
       ctx.fillRect(width - 150, 20, 20, 3);
       ctx.fillStyle = '#333';
       ctx.fillText('Reference Speed', width - 125, 25);
-      
       ctx.strokeStyle = '#10b981';
       ctx.lineWidth = 3;
       ctx.setLineDash([5, 3]);
@@ -370,15 +298,14 @@ export const GraphWindow = ({ blockId, blockName, graphType, data, onClose, maxP
       ctx.setLineDash([]);
       ctx.fillStyle = '#333';
       ctx.fillText('Measured Speed', width - 125, 43);
-      
-      // Draw info text
+
       ctx.fillStyle = '#666';
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'right';
       ctx.fillText(`Points: ${data.xData.length}`, width - 10, height - padding.bottom + 35);
     }
 
-  }, [data, graphType, maxPoints]);
+  }, [data, graphType]);
 
   const handleMouseDown = (e) => {
     if (e.target.closest('.graph-close-button')) return;

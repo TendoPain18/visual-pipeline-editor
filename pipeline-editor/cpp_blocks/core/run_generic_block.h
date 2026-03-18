@@ -310,31 +310,8 @@ void run_manual_block(
     DWORD pid = GetCurrentProcessId();
     socket.sendInit(blockId, config.name, pid);
 
-    printf("\n========================================\n");
-    printf("%s - MANUAL I/O MODE\n", config.name);
-    printf("========================================\n");
-    printf("Block has full control over read/write timing\n");
-
     bool isSource = (config.inputs  == 0);
     bool isSink   = (config.outputs == 0);
-
-    if (!isSource) {
-        printf("INPUTS: %d\n", config.inputs);
-        for (int i = 0; i < config.inputs; i++) {
-            int bufSize = calculateBufferSize(config.inputPacketSizes[i], config.inputBatchSizes[i]);
-            printf("  Input %d: %d bytes x %d packets = %.2f KB\n",
-                   i, config.inputPacketSizes[i], config.inputBatchSizes[i], bufSize / 1024.0);
-        }
-    }
-    if (!isSink) {
-        printf("OUTPUTS: %d\n", config.outputs);
-        for (int i = 0; i < config.outputs; i++) {
-            int bufSize = calculateBufferSize(config.outputPacketSizes[i], config.outputBatchSizes[i]);
-            printf("  Output %d: %d bytes x %d packets = %.2f KB\n",
-                   i, config.outputPacketSizes[i], config.outputBatchSizes[i], bufSize / 1024.0);
-        }
-    }
-    printf("========================================\n\n");
 
     CustomData customData;
     if (init_fn) {

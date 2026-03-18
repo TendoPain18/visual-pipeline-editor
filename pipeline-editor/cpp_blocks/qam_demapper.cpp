@@ -7,9 +7,6 @@
 // ============================================================
 // IEEE 802.11a QAM Demapper (Frequency Domain)
 //
-// Receives the output of batch_fft (preamble already stripped).
-// First block in each packet = SIGNAL symbol.
-//
 // Inputs:
 //   in[0]: Stacked freq-domain IQ blocks from batch_fft (129024 bytes/pkt)
 //             504 blocks x 256 bytes each
@@ -21,44 +18,26 @@
 //             Byte 2: mac_len_hi
 //
 // Outputs:
-//   out[0]: rate + lip + DATA_INTERLEAVED              (3027 bytes/pkt)
+//   out[0]: rate + lip_bits + DATA_INTERLEAVED         (3029 bytes/pkt)
 //             Byte 0: rate_value
-//             Byte 1: lip_lo
-//             Byte 2: lip_hi
-//             Bytes [3..3+lip-1]: interleaved DATA bits repacked to bytes
+//             Bytes 1-4: lip_bits (uint32 LE, EXACT bits)
+//             Bytes [5..]: interleaved DATA bits
 //   out[1]: SIGNAL_INTERLEAVED                         (6 bytes/pkt)
 //
 // Protocol (deadlock-free):
-//   1. Read IQ freq-domain data (in[0])
-//   2. Demap SIGNAL block (block 0) -> send SIGNAL_INTERLEAVED (out[1])
-//   3. Wait for feedback (in[1]) -> extract rate + mac_length
+//   1. Read IQ (in[0])
+//   2. Demap SIGNAL -> send SIGNAL_INTERLEAVED (out[1])
+//   3. Wait for feedback (in[1]) -> rate + mac_length
 //   4. Recompute N_SYM from mac_length + rate
-//   5. Demap DATA blocks -> send rate+lip+DATA_INTERLEAVED (out[0])
-//
-// Subcarrier layout (64-point FFT, index -32..+31 -> array [0..63]):
-//   Data:   [-26:-22, -20:-8, -6:-1, 1:6, 8:20, 22:26]  = 48 subcarriers
-//   Pilots: [-21, -7, 7, 21]                              = 4 subcarriers (ignored)
-//
-// int8 pipe convention: stored byte B -> pipe int8_t = int8_t(uint8_t(B) - 128)
+//   5. Demap DATA -> send rate+lip_bits+DATA (out[0])
 // ============================================================
 
-// -----------------------------------------------------------------------
-// Constants
-// -----------------------------------------------------------------------
-static const int MAX_SYMBOLS      = 504;
-static const int SUBCARRIERS      = 64;
-static const int BYTES_PER_BLOCK  = SUBCARRIERS * 4;               // 256
-static const int IN_IQ_PKT_SIZE   = MAX_SYMBOLS * BYTES_PER_BLOCK; // 129024
-static const int BATCH_SIZE       = 64;
+static const int MAX_SYMBOLS     = 504;
+static const int SUBCARRIERS     = 64;
+static const int BYTES_PER_BLOCK = SUBCARRIERS * 4;               // 256
+static const int IN_IQ_PKT_SIZE  = MAX_SYMBOLS * BYTES_PER_BLOCK; // 129024
 
-// -----------------------------------------------------------------------
-// Rate parameters
-// -----------------------------------------------------------------------
-struct RateParams {
-    int NBPSC;
-    int NCBPS;
-    int NDBPS;
-};
+struct RateParams { int NBPSC; int NCBPS; int NDBPS; };
 
 static RateParams getRate(uint8_t rateVal) {
     switch (rateVal) {
@@ -74,9 +53,20 @@ static RateParams getRate(uint8_t rateVal) {
     }
 }
 
-// -----------------------------------------------------------------------
-// Subcarrier map (must match mapper)
-// -----------------------------------------------------------------------
+static const char* rateNameFromVal(uint8_t rateVal) {
+    switch (rateVal) {
+        case 13: return "6 Mbps (BPSK 1/2)";
+        case 15: return "9 Mbps (BPSK 3/4)";
+        case  5: return "12 Mbps (QPSK 1/2)";
+        case  7: return "18 Mbps (QPSK 3/4)";
+        case  9: return "24 Mbps (16-QAM 1/2)";
+        case 11: return "36 Mbps (16-QAM 3/4)";
+        case  1: return "48 Mbps (64-QAM 2/3)";
+        case  3: return "54 Mbps (64-QAM 3/4)";
+        default: return "UNKNOWN";
+    }
+}
+
 static int g_dataSubcarriers[48];
 
 static void buildSubcarrierMap() {
@@ -89,9 +79,6 @@ static void buildSubcarrierMap() {
     for (int f = 22;  f <= 26;  f++) g_dataSubcarriers[idx++] = f + 32;
 }
 
-// -----------------------------------------------------------------------
-// Unpack one IQ pair from 4 pipe bytes -> double
-// -----------------------------------------------------------------------
 static void unpackIQ(const int8_t* src, double& I, double& Q) {
     uint8_t iLo = (uint8_t)((int32_t)src[0] + 128);
     uint8_t iHi = (uint8_t)((int32_t)src[1] + 128);
@@ -101,28 +88,15 @@ static void unpackIQ(const int8_t* src, double& I, double& Q) {
     Q = (double)(int16_t)((uint16_t)qLo | ((uint16_t)qHi << 8)) / 32767.0;
 }
 
-// -----------------------------------------------------------------------
-// Hard-decision demappers
-//
-// 64-QAM Gray code axis (b0=MSB): inverse of mapper.
-//   000->-7, 001->-5, 011->-3, 010->-1, 110->+1, 111->+3, 101->+5, 100->+7
-// -----------------------------------------------------------------------
-
-static void demapBPSK(double I, double /*Q*/, uint8_t* bits) {
-    bits[0] = (I >= 0.0) ? 1 : 0;
-}
-
-static void demapQPSK(double I, double Q, uint8_t* bits) {
-    bits[0] = (I >= 0.0) ? 1 : 0;
-    bits[1] = (Q >= 0.0) ? 1 : 0;
-}
+static void demapBPSK(double I, double,   uint8_t* bits) { bits[0] = (I >= 0.0) ? 1 : 0; }
+static void demapQPSK(double I, double Q, uint8_t* bits) { bits[0]=(I>=0)?1:0; bits[1]=(Q>=0)?1:0; }
 
 static void demapQAM16Axis(double val, uint8_t& b0, uint8_t& b1) {
-    double x = val * 3.0; // back to raw {-3,-1,+1,+3}
-    if      (x < -2.0) { b0 = 0; b1 = 0; }
-    else if (x <  0.0) { b0 = 0; b1 = 1; }
-    else if (x <  2.0) { b0 = 1; b1 = 1; }
-    else               { b0 = 1; b1 = 0; }
+    double x = val * 3.0;
+    if      (x < -2.0) { b0=0; b1=0; }
+    else if (x <  0.0) { b0=0; b1=1; }
+    else if (x <  2.0) { b0=1; b1=1; }
+    else               { b0=1; b1=0; }
 }
 static void demap16QAM(double I, double Q, uint8_t* bits) {
     demapQAM16Axis(I, bits[0], bits[1]);
@@ -130,15 +104,15 @@ static void demap16QAM(double I, double Q, uint8_t* bits) {
 }
 
 static void demapQAM64Axis(double val, uint8_t& b0, uint8_t& b1, uint8_t& b2) {
-    double x = val * 7.0; // back to raw {-7,-5,-3,-1,+1,+3,+5,+7}
-    if      (x < -6.0) { b0=0; b1=0; b2=0; }
-    else if (x < -4.0) { b0=0; b1=0; b2=1; }
-    else if (x < -2.0) { b0=0; b1=1; b2=1; }
-    else if (x <  0.0) { b0=0; b1=1; b2=0; }
-    else if (x <  2.0) { b0=1; b1=1; b2=0; }
-    else if (x <  4.0) { b0=1; b1=1; b2=1; }
-    else if (x <  6.0) { b0=1; b1=0; b2=1; }
-    else               { b0=1; b1=0; b2=0; }
+    double x = val * 7.0;
+    if      (x < -6.0) { b0=0;b1=0;b2=0; }
+    else if (x < -4.0) { b0=0;b1=0;b2=1; }
+    else if (x < -2.0) { b0=0;b1=1;b2=1; }
+    else if (x <  0.0) { b0=0;b1=1;b2=0; }
+    else if (x <  2.0) { b0=1;b1=1;b2=0; }
+    else if (x <  4.0) { b0=1;b1=1;b2=1; }
+    else if (x <  6.0) { b0=1;b1=0;b2=1; }
+    else               { b0=1;b1=0;b2=0; }
 }
 static void demap64QAM(double I, double Q, uint8_t* bits) {
     demapQAM64Axis(I, bits[0], bits[1], bits[2]);
@@ -147,17 +121,14 @@ static void demap64QAM(double I, double Q, uint8_t* bits) {
 
 static void demapSymbol(double I, double Q, int NBPSC, uint8_t* bits) {
     switch (NBPSC) {
-        case 1: demapBPSK (I, Q, bits); break;
-        case 2: demapQPSK (I, Q, bits); break;
-        case 4: demap16QAM(I, Q, bits); break;
-        case 6: demap64QAM(I, Q, bits); break;
-        default: memset(bits, 0, NBPSC); break;
+        case 1: demapBPSK (I,Q,bits); break;
+        case 2: demapQPSK (I,Q,bits); break;
+        case 4: demap16QAM(I,Q,bits); break;
+        case 6: demap64QAM(I,Q,bits); break;
+        default: memset(bits,0,NBPSC); break;
     }
 }
 
-// -----------------------------------------------------------------------
-// Extract NCBPS bits from one OFDM frequency block
-// -----------------------------------------------------------------------
 static void readOfdmBlock(const int8_t* blockBuf, uint8_t* bits, int NBPSC) {
     for (int sc = 0; sc < 48; sc++) {
         double I, Q;
@@ -166,23 +137,16 @@ static void readOfdmBlock(const int8_t* blockBuf, uint8_t* bits, int NBPSC) {
     }
 }
 
-// -----------------------------------------------------------------------
-// Dynamic N_SYM computation from mac_length + rate
-// -----------------------------------------------------------------------
 static void computeEncLen(int macLength, const RateParams& rp,
-                           int& N_SYM, int& encLen, int& lip) {
+                           int& N_SYM, int& encLen, uint32_t& encBits) {
+    // DATA symbols: ceil((SERVICE(16) + PSDU + TAIL(6)) / NDBPS)
     int dataBits = 16 + macLength * 8 + 6;
-    N_SYM  = (dataBits + rp.NDBPS - 1) / rp.NDBPS;
-    encLen = 6 + (N_SYM * rp.NCBPS) / 8;
-    lip    = encLen - 6;
+    N_SYM   = (dataBits + rp.NDBPS - 1) / rp.NDBPS;
+    encBits = 48 + (uint32_t)(N_SYM * rp.NCBPS);  // SIGNAL(48 coded) + DATA
+    encLen  = (int)((encBits + 7) / 8);
 }
 
-// -----------------------------------------------------------------------
-// Block state
-// -----------------------------------------------------------------------
-struct QamDemapperData {
-    int frameCount;
-};
+struct QamDemapperData { int frameCount; };
 
 QamDemapperData init_qam_demapper(const BlockConfig& config) {
     QamDemapperData data;
@@ -209,27 +173,27 @@ void process_qam_demapper(
 
     const int inIQPkt    = config.inputPacketSizes[0];
     const int inFbPkt    = config.inputPacketSizes[1];
-    const int outDataPkt = config.outputPacketSizes[0];
-    const int outSigPkt  = config.outputPacketSizes[1];
+    const int outDataPkt = config.outputPacketSizes[0];  // 3029
+    const int outSigPkt  = config.outputPacketSizes[1];  // 6
 
-    // ===== STEP 1: Read IQ frequency-domain blocks =====
+    const bool isFirstBatch = (customData.frameCount == 0);
+
+    // STEP 1: Read IQ freq-domain blocks
     int actualCount = inIQ.read(iqBuf);
 
     memset(signalBuf,  0x80, outSignal.getBufferSize());
     memset(dataOutBuf, 0x80, outData.getBufferSize());
 
-    // ===== STEP 2: Demap SIGNAL block (block 0) for every packet =====
+
+
+    // STEP 2: Demap SIGNAL block (block 0 = 48 encoded bits, BPSK) for every packet
     for (int i = 0; i < actualCount; i++) {
         const int iqOff  = i * inIQPkt;
         const int sigOff = i * outSigPkt;
 
-        // Block 0 in the stripped stack IS the SIGNAL block
-        const int8_t* sigBlock = iqBuf + iqOff;
-
         uint8_t signalBits[48];
-        readOfdmBlock(sigBlock, signalBits, 1);  // BPSK -> 48 bits
+        readOfdmBlock(iqBuf + iqOff, signalBits, 1);  // BPSK
 
-        // Repack 48 bits into 6 bytes
         for (int b = 0; b < 6; b++) {
             uint8_t byte = 0;
             for (int bit = 0; bit < 8; bit++)
@@ -238,14 +202,16 @@ void process_qam_demapper(
         }
     }
 
-    // ===== STEP 3: Send SIGNAL_INTERLEAVED =====
+    // STEP 3: Send SIGNAL_INTERLEAVED
     outSignal.write(signalBuf, actualCount);
 
-    // ===== STEP 4: Wait for feedback =====
+    // STEP 4: Wait for feedback (unblocked after ppdu_decap processes SIGNAL)
     inFeedback.read(feedbackBuf);
 
-    // ===== STEP 5+6+7: Demap DATA blocks =====
+    // STEP 5–7: Demap DATA blocks
     for (int i = 0; i < actualCount; i++) {
+        const bool dbg = isFirstBatch && (i == 0);
+
         const int iqOff   = i * inIQPkt;
         const int fbOff   = i * inFbPkt;
         const int dataOff = i * outDataPkt;
@@ -256,37 +222,60 @@ void process_qam_demapper(
         int macLength = (int)macLenLo | ((int)macLenHi << 8);
 
         RateParams rp = getRate(rateVal);
-        int N_SYM, encLen, lip;
-        computeEncLen(macLength, rp, N_SYM, encLen, lip);
+        int N_SYM, encLen;
+        uint32_t encBits;
+        computeEncLen(macLength, rp, N_SYM, encLen, encBits);
 
-        if (lip < 0)    lip = 0;
-        if (lip > 3024) lip = 3024;
+        if (encLen < 6)    encLen = 6;
+        if (encLen > 3024) encLen = 3024;
 
         int totalDataBits = N_SYM * rp.NCBPS;
         uint8_t* dataBits = new uint8_t[totalDataBits]();
 
-        // DATA blocks start at block index 1 (block 0 = SIGNAL)
         for (int sym = 0; sym < N_SYM; sym++) {
+            // Block 0 = SIGNAL, so DATA starts at block 1
             readOfdmBlock(iqBuf + iqOff + (sym + 1) * BYTES_PER_BLOCK,
                           dataBits + sym * rp.NCBPS, rp.NBPSC);
         }
 
+        // Pack DATA bits into bytes (offset 5 = after 1-byte rate + 4-byte lip_bits)
         int dataBytes = totalDataBits / 8;
-        if (dataBytes > lip) dataBytes = lip;
+        // FIX 2: clamp to actual output buffer capacity, not encLen-6.
+        // encLen was already clamped to 3024, making encLen-6=3018 and silently
+        // dropping 6 real demapped bytes, replaced by zeros in the Viterbi input.
+        if (dataBytes > outDataPkt - 5) dataBytes = outDataPkt - 5;
 
         for (int b = 0; b < dataBytes; b++) {
             uint8_t byte = 0;
             for (int bit = 0; bit < 8; bit++)
                 byte |= (dataBits[b * 8 + bit] & 1) << bit;
-            dataOutBuf[dataOff + 3 + b] = (int8_t)((int32_t)byte - 128);
+            dataOutBuf[dataOff + 5 + b] = (int8_t)((int32_t)byte - 128);
         }
 
-        dataOutBuf[dataOff + 0] = (int8_t)((int32_t)rateVal              - 128);
-        dataOutBuf[dataOff + 1] = (int8_t)((int32_t)(lip & 0xFF)         - 128);
-        dataOutBuf[dataOff + 2] = (int8_t)((int32_t)((lip >> 8) & 0xFF)  - 128);
+        // Write header: rate_val(1B) + dataLipBits uint32 LE (4B)
+        // FIX 1: send DATA bits only (encBits-48), not total incl. SIGNAL.
+        uint32_t dataLipBits = (encBits >= 48) ? encBits - 48 : 0;
+        dataOutBuf[dataOff + 0] = (int8_t)((int32_t)rateVal                            - 128);
+        dataOutBuf[dataOff + 1] = (int8_t)((int32_t)((dataLipBits      ) & 0xFF)       - 128);
+        dataOutBuf[dataOff + 2] = (int8_t)((int32_t)((dataLipBits >>  8) & 0xFF)       - 128);
+        dataOutBuf[dataOff + 3] = (int8_t)((int32_t)((dataLipBits >> 16) & 0xFF)       - 128);
+        dataOutBuf[dataOff + 4] = (int8_t)((int32_t)((dataLipBits >> 24) & 0xFF)       - 128);
+
+        if (dbg) {
+            int inputBlocks = 1 + N_SYM;  // 1 SIGNAL + N_SYM DATA
+            uint32_t dataEncBits = (uint32_t)(N_SYM * rp.NCBPS);
+            printf("[QamDemapper] pkt[0] INPUT : %d blocks x 256 bytes = %d bits "
+                   "(1xSIGNAL + %dxDATA)\n",
+                   inputBlocks, inputBlocks * 256 * 8, N_SYM);
+            printf("[QamDemapper] pkt[0] OUTPUT: signal=48  data=%u  total=%u bits\n",
+                   dataEncBits, encBits);
+            fflush(stdout);
+        }
 
         delete[] dataBits;
     }
+
+
 
     outData.write(dataOutBuf, actualCount);
     customData.frameCount += actualCount;
@@ -314,12 +303,11 @@ int main(int argc, char* argv[]) {
         2,              // outputs
         {129024, 3},    // inputPacketSizes  [504 freq blocks * 256 bytes, feedback]
         {64, 64},       // inputBatchSizes
-        {3027, 6},      // outputPacketSizes [rate+lip+DATA_INT, SIGNAL_INT]
+        {3029, 6},      // outputPacketSizes [rate+lip_bits(uint32 LE)+DATA_INT(3024)=3029, SIGNAL_INT(6)]
         {64, 64},       // outputBatchSizes
         false,          // ltr
         true,           // startWithAll
-        "IEEE 802.11a QAM Demapper: freq-domain IQ blocks -> interleaved bits; "
-        "SIGNAL first for feedback; receives preamble-stripped FFT output"
+        "IEEE 802.11a QAM Demapper: lip in bits (uint32 LE), 3029-byte data output"
     };
 
     run_manual_block(pipeIns, pipeOuts, config, process_qam_demapper, init_qam_demapper);

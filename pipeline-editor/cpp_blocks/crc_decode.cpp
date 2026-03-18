@@ -58,10 +58,20 @@ void process_crc_decode(
     
     // MANUAL READ
     int actualCount = input.read(inputBatch);
-    
+
     int inputPacketSize = input.getPacketSize();
     int outputPacketSize = output.getPacketSize();
     int dataSize = inputPacketSize - 4;
+
+    static bool firstBatch = true;
+    if (firstBatch) {
+        firstBatch = false;
+        printf("[CrcDecode] pkt[0] INPUT : %d bits (data=%d + CRC=32)\n",
+               inputPacketSize * 8, dataSize * 8);
+        printf("[CrcDecode] pkt[0] OUTPUT: %d bits (data) + 8 bits (error flag)\n",
+               dataSize * 8);
+        fflush(stdout);
+    }
     
     memset(outputBatch, 0, output.getBufferSize());
     
@@ -96,11 +106,7 @@ void process_crc_decode(
     // MANUAL WRITE
     output.write(outputBatch, actualCount);
     
-    if (customData.packetCount % 100000 == 0) {
-        double errorRate = 100.0 * customData.errorCount / customData.packetCount;
-        printf("Packets: %d, Errors: %d (%.2f%%)\n", 
-               customData.packetCount, customData.errorCount, errorRate);
-    }
+
     
     delete[] inputBatch;
     delete[] outputBatch;

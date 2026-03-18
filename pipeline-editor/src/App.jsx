@@ -288,8 +288,7 @@ const PipelineEditor = () => {
         case 'BLOCK_READY':
           addLog('success', `[${blockName}] [${language}] Ready`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'ready' }));
-          // ✅ FIX: Signal the waiting Promise in useServerOperations directly.
-          // The old code relied on polling React state which had stale closure issues.
+          // Signal the waiting Promise in useServerOperations directly.
           signalBlockReady(blockId);
           setBlockProcesses(prev => {
             const blockEntry = Object.entries(prev).find(([key, proc]) => 
@@ -319,6 +318,7 @@ const PipelineEditor = () => {
           break;
           
         case 'BLOCK_GRAPH':
+          // Single-point accumulating graph (existing behaviour — untouched)
           const graphPoint = { x: data.x, y: data.y };
           setGraphData(prev => {
             const existing = prev[blockId] || { xData: [], yData: [] };
@@ -341,11 +341,38 @@ const PipelineEditor = () => {
             };
           });
           break;
+
+        case 'BLOCK_GRAPH_BATCH':
+          // Batch scatter plot — REPLACE previous points entirely (no accumulation).
+          // message.points is an array of [I, Q] pairs sent by scatter_plot.cpp.
+          // We store them as { xData: [...], yData: [...] } to reuse GraphWindow.
+          {
+            const incomingPoints = message.points || data?.points || [];
+            const xData = incomingPoints.map(p => p[0]);
+            const yData = incomingPoints.map(p => p[1]);
+
+            // Replace — not append
+            setGraphData(prev => ({
+              ...prev,
+              [blockId]: { xData, yData }
+            }));
+
+            // Auto-open a graph window for this block if not already open.
+            // We use blockName from the message (set to the C++ block's config.name).
+            setGraphWindows(prev => {
+              if (prev[blockId]) return prev;   // already open
+              return {
+                ...prev,
+                [blockId]: { blockName: blockName || `Block ${blockId}`, graphType: 'scatter' }
+              };
+            });
+          }
+          break;
           
         case 'BLOCK_ERROR':
           addLog('error', `[${blockName}] [${language}] ${data.error || data.status || 'Error'}`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'error' }));
-          // ✅ FIX: Also reject the waiting Promise so startup doesn't hang on errored blocks
+          // Reject the waiting Promise so startup doesn't hang on errored blocks
           signalBlockError(blockId, data.error || data.status || 'Block error');
           break;
           
@@ -372,7 +399,7 @@ const PipelineEditor = () => {
     };
   }, []);
 
-  // Update graph windows when graph data changes
+  // Auto-open graph windows for blocks flagged as isGraph (existing BLOCK_GRAPH flow)
   useEffect(() => {
     Object.entries(graphData).forEach(([blockId, data]) => {
       if (!graphWindows[blockId]) {

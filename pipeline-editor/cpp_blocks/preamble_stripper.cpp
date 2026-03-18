@@ -1,14 +1,12 @@
 #include "core/run_generic_block.h"
 #include <cstring>
 #include <cstdint>
-#include <cmath>
 #include <cstdio>
 
 // ============================================================
 // IEEE 802.11a Preamble Stripper (Time Domain)
 //
-// Sits between batch_ifft and batch_fft.
-// Removes the 4 preamble symbols (STS x2, LTS x2) from each
+// Removes the 4 preamble symbols (2xSTS + 2xLTS) from each
 // time-domain packet, leaving SIGNAL + DATA symbols only.
 //
 // Inputs:
@@ -17,22 +15,12 @@
 //
 // Outputs:
 //   out[0]: Stripped time-domain samples (161280 bytes/pkt)
-//             504 symbols x 320 bytes each (80 samples x 4 bytes)
+//             504 symbols x 320 bytes each
 //             = (508 - 4) * 320
-//
-// Stripping logic:
-//   - Each symbol (after IFFT+CP) = 80 samples = 320 bytes
-//   - Preamble occupies first 4 symbols = first 1280 bytes
-//   - Fatal error if packet has fewer than 5 symbols (4 preamble + 1 SIGNAL)
-//
-// int8 pipe convention: stored byte B -> pipe int8_t = int8_t(uint8_t(B) - 128)
 // ============================================================
 
-// -----------------------------------------------------------------------
-// Constants
-// -----------------------------------------------------------------------
-static const int PREAMBLE_SYMBOLS  = 4;                                    // 2 STS + 2 LTS
-static const int SAMPLES_PER_SYM   = 80;                                   // 64 IFFT + 16 CP
+static const int PREAMBLE_SYMBOLS  = 4;
+static const int SAMPLES_PER_SYM   = 80;
 static const int BYTES_PER_SAMPLE  = 4;
 static const int BYTES_PER_SYM     = SAMPLES_PER_SYM * BYTES_PER_SAMPLE;  // 320
 static const int PREAMBLE_BYTES    = PREAMBLE_SYMBOLS * BYTES_PER_SYM;    // 1280
@@ -41,14 +29,8 @@ static const int OUT_TOTAL_SYMBOLS = IN_TOTAL_SYMBOLS - PREAMBLE_SYMBOLS;  // 50
 static const int IN_PKT_SIZE       = IN_TOTAL_SYMBOLS  * BYTES_PER_SYM;   // 162560
 static const int OUT_PKT_SIZE      = OUT_TOTAL_SYMBOLS * BYTES_PER_SYM;   // 161280
 static const int MIN_PKT_BYTES     = (PREAMBLE_SYMBOLS + 1) * BYTES_PER_SYM; // 1600
-static const int BATCH_SIZE        = 64;
 
-// -----------------------------------------------------------------------
-// Block state
-// -----------------------------------------------------------------------
-struct PreambleStripperData {
-    int frameCount;
-};
+struct PreambleStripperData { int frameCount; };
 
 PreambleStripperData init_preamble_stripper(const BlockConfig& config) {
     PreambleStripperData data;
@@ -68,29 +50,58 @@ void process_preamble_stripper(
     int8_t* inBuf  = new int8_t[inTime.getBufferSize()];
     int8_t* outBuf = new int8_t[outTime.getBufferSize()];
 
-    const int inPkt  = config.inputPacketSizes[0];
-    const int outPkt = config.outputPacketSizes[0];
+    const int inPkt  = config.inputPacketSizes[0];   // 162560
+    const int outPkt = config.outputPacketSizes[0];  // 161280
+
+    const bool isFirstBatch = (customData.frameCount == 0);
 
     int actualCount = inTime.read(inBuf);
 
     memset(outBuf, 0x80, outTime.getBufferSize());
 
+
+
     for (int i = 0; i < actualCount; i++) {
         const int8_t* pktIn  = inBuf  + i * inPkt;
         int8_t*       pktOut = outBuf + i * outPkt;
 
-        // Safety check: packet must contain preamble + at least one SIGNAL symbol
+        // Safety check
         if (inPkt < MIN_PKT_BYTES) {
             fprintf(stderr,
-                "[PreambleStripper] FATAL pkt[%d]: packet size %d bytes is smaller than "
-                "minimum required %d bytes (%d preamble symbols + 1 SIGNAL symbol).\n",
-                i, inPkt, MIN_PKT_BYTES, PREAMBLE_SYMBOLS);
+                "[PreambleStripper] FATAL pkt[%d]: size %d < minimum %d bytes\n",
+                i, inPkt, MIN_PKT_BYTES);
             exit(1);
         }
 
-        // Strip preamble: copy everything after the first PREAMBLE_BYTES bytes
+        // Strip preamble: skip first PREAMBLE_BYTES, copy the rest
         memcpy(pktOut, pktIn + PREAMBLE_BYTES, outPkt);
+
+        // Read actual symbol count embedded in last 4 bytes of input
+        uint32_t actualIn = 0;
+        for (int j = 0; j < 4; j++)
+            actualIn |= ((uint32_t)(uint8_t)((int32_t)pktIn[inPkt - 4 + j] + 128)) << (j * 8);
+        if (actualIn == 0 || actualIn > (uint32_t)IN_TOTAL_SYMBOLS)
+            actualIn = IN_TOTAL_SYMBOLS;
+
+        uint32_t actualOut = (actualIn > (uint32_t)PREAMBLE_SYMBOLS)
+                             ? actualIn - PREAMBLE_SYMBOLS : 0;
+
+        // Pass actual output count forward in last 4 bytes of output
+        for (int j = 0; j < 4; j++) {
+            uint8_t b = (uint8_t)((actualOut >> (j * 8)) & 0xFF);
+            pktOut[outPkt - 4 + j] = (int8_t)((int32_t)b - 128);
+        }
+
+        if (isFirstBatch && i == 0) {
+            printf("[PreambleStripper] pkt[0] INPUT : %d bits (%u syms x %d bytes)\n",
+                   (int)actualIn * BYTES_PER_SYM * 8, actualIn, BYTES_PER_SYM);
+            printf("[PreambleStripper] pkt[0] OUTPUT: %d bits (%u syms x %d bytes)\n",
+                   (int)actualOut * BYTES_PER_SYM * 8, actualOut, BYTES_PER_SYM);
+            fflush(stdout);
+        }
     }
+
+
 
     outTime.write(outBuf, actualCount);
     customData.frameCount += actualCount;

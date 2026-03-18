@@ -5,43 +5,45 @@
 // IEEE 802.11a PPDU Decapsulator
 //
 // Inputs:
-//   in[0]: lip + Descrambled DATA  (1517 bytes/pkt)  <- [0] rate counter
-//             Byte 0: lip_lo    (PPDU frame bytes low)
-//             Byte 1: lip_hi    (PPDU frame bytes high)
-//             Bytes [2..2+lip-1]: descrambled PPDU (SIGNAL+SERVICE+PSDU+TAIL_PAD)
-//   in[1]: SIGNAL  (3 bytes/pkt)
+//   in[0]: lip_bits + Descrambled DATA  (1519 bytes/pkt)
+//             Bytes 0-3: lip_bits (uint32 LE, EXACT PPDU frame bits)
+//             Bytes [4..4+lip_bytes-1]: descrambled PPDU
+//   in[1]: SIGNAL  (3 bytes/pkt, decoded) — arrives FIRST
 //
 // Outputs:
-//   out[0]: PSDU      (1504 bytes/pkt)        <- [0] rate counter
+//   out[0]: PSDU      (1504 bytes/pkt)
 //   out[1]: Feedback  (3 bytes/pkt)
 //             Byte 0: rate_value
 //             Byte 1: mac_len_lo
 //             Byte 2: mac_len_hi
 //
-// lip is read directly from in[0] bytes [0..1].
-// PSDU extraction: skip 5 bytes (SIGNAL[3]+SERVICE[2]) inside the PPDU payload,
-// then copy (lip - 5) bytes capped at outPsduPkt (1504).
-// No recomputation of frameBytes from mac_length needed here.
-//
-// SIGNAL is still parsed to build the feedback (rate + mac_length) for the
-// upstream middleman -- that is the only use of SIGNAL in this block.
+// in[0] layout: [lip_bits(4B)] [SIGNAL(3B)] [SERVICE(2B)] [PSDU...] [TAIL_PAD]
+// PSDU offset inside in[0] = 4 (lip header) + 5 (SIGNAL+SERVICE) = 9
 //
 // Protocol (deadlock-free):
-//   1. Read SIGNAL (in[1])   -- SIGNAL physically arrives FIRST
-//   2. Parse each SIGNAL: extract rate + mac_length for feedback
-//   3. Send feedback (out[1]) -- unblocks the upstream middleman's wait
-//   4. Read DATA (in[0])     -- DATA arrives after middleman gets feedback
-//   5. Read lip from in[0] header; copy PSDU = data[2+5 .. 2+lip-1]
-//   6. Send PSDU (out[0])
+//   1. Read SIGNAL (in[1])    -- arrives first
+//   2. Parse rate + mac_length from SIGNAL
+//   3. Send feedback (out[1]) -- unblocks upstream middleman
+//   4. Read DATA (in[0])      -- arrives after middleman gets feedback
+//   5. Slice PSDU using exact lip_bits, send (out[0])
 // ============================================================
 
 static const uint8_t VALID_RATES[] = {13, 15, 5, 7, 9, 11, 1, 3};
 static const int     NUM_VALID_RATES = 8;
 
 static bool isValidRate(uint8_t r) {
-    for (int i = 0; i < NUM_VALID_RATES; i++)
-        if (VALID_RATES[i] == r) return true;
+    for (int i = 0; i < NUM_VALID_RATES; i++) if (VALID_RATES[i] == r) return true;
     return false;
+}
+
+static const char* rateNameFromVal(uint8_t rateVal) {
+    switch (rateVal) {
+        case 13: return "6 Mbps"; case 15: return "9 Mbps";
+        case  5: return "12 Mbps"; case  7: return "18 Mbps";
+        case  9: return "24 Mbps"; case 11: return "36 Mbps";
+        case  1: return "48 Mbps"; case  3: return "54 Mbps";
+        default: return "UNKNOWN";
+    }
 }
 
 struct PpduDecapsulateData { int frameCount; };
@@ -49,14 +51,7 @@ struct PpduDecapsulateData { int frameCount; };
 PpduDecapsulateData init_ppdu_decapsulate(const BlockConfig& config) {
     PpduDecapsulateData d;
     d.frameCount = 0;
-    printf("[PpduDecapsulate] in[0]: [lip_lo(1)|lip_hi(1)|DATA(1515)] = 1517B\n");
-    printf("[PpduDecapsulate] lip used directly to slice PSDU (no frameBytes recompute)\n");
-    printf("[PpduDecapsulate] Protocol (deadlock-free):\n");
-    printf("[PpduDecapsulate]   1. Read SIGNAL   (in[1]) -- arrives first\n");
-    printf("[PpduDecapsulate]   2. Send feedback (out[1])-- unblocks middleman\n");
-    printf("[PpduDecapsulate]   3. Read DATA     (in[0]) -- arrives after feedback\n");
-    printf("[PpduDecapsulate]   4. Slice PSDU using lip, send (out[0])\n");
-    printf("[PpduDecapsulate] Ready\n");
+
     return d;
 }
 
@@ -66,7 +61,7 @@ void process_ppdu_decapsulate(
     PpduDecapsulateData& customData,
     const BlockConfig& config
 ) {
-    PipeIO inData     (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);  // 1517
+    PipeIO inData     (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);  // 1519
     PipeIO inSignal   (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);  // 3
     PipeIO outPsdu    (pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]); // 1504
     PipeIO outFeedback(pipeOut[1], config.outputPacketSizes[1], config.outputBatchSizes[1]); // 3
@@ -77,17 +72,21 @@ void process_ppdu_decapsulate(
     int8_t* psduBuf     = new int8_t[outPsdu.getBufferSize()];
 
     const int inSigPkt   = config.inputPacketSizes[1];   // 3
-    const int inDataPkt  = config.inputPacketSizes[0];   // 1517
+    const int inDataPkt  = config.inputPacketSizes[0];   // 1519
     const int outFbPkt   = config.outputPacketSizes[1];  // 3
     const int outPsduPkt = config.outputPacketSizes[0];  // 1504
 
-    // ===== STEP 1: Read SIGNAL -- arrives first =====
+    const bool isFirstBatch = (customData.frameCount == 0);
+
+    // STEP 1: Read SIGNAL -- arrives first
     int actualCount = inSignal.read(signalBuf);
 
     memset(feedbackBuf, 0, outFeedback.getBufferSize());
     memset(psduBuf,     0, outPsdu.getBufferSize());
 
-    // ===== STEP 2: Parse SIGNAL -> rate + mac_length (for feedback only) =====
+
+
+    // STEP 2: Parse SIGNAL -> rate + mac_length
     for (int i = 0; i < actualCount; i++) {
         const int sigOff = i * inSigPkt;
         const int fbOff  = i * outFbPkt;
@@ -102,50 +101,72 @@ void process_ppdu_decapsulate(
                          | (((uint16_t)(b2 & 0x01)) << 11);
 
         if (!isValidRate(rateVal)) {
-            printf("[PpduDecapsulate] WARNING pkt %d: invalid RATE %d -> using 5\n", i, rateVal);
+            fprintf(stderr, "[PpduDecapsulate] WARNING pkt %d: invalid RATE %d -> using 5\n",
+                    i, rateVal);
             rateVal = 5;
         }
         if (length == 0 || length > 4095) {
-            printf("[PpduDecapsulate] WARNING pkt %d: invalid LENGTH %d -> using 1504\n", i, length);
+            fprintf(stderr, "[PpduDecapsulate] WARNING pkt %d: invalid LENGTH %d -> using 1504\n",
+                    i, length);
             length = 1504;
         }
 
         feedbackBuf[fbOff + 0] = (int8_t)((int32_t)rateVal                - 128);
         feedbackBuf[fbOff + 1] = (int8_t)((int32_t)(length & 0xFF)        - 128);
         feedbackBuf[fbOff + 2] = (int8_t)((int32_t)((length >> 8) & 0xFF) - 128);
+
+        if (isFirstBatch && i == 0) {
+            // will print after data extraction
+        }
     }
 
-    // ===== STEP 3: Send feedback -- unblocks the upstream middleman =====
+    // STEP 3: Send feedback -- unblocks upstream middleman
     outFeedback.write(feedbackBuf, actualCount);
 
-    // ===== STEP 4: Read DATA -- arrives after middleman gets feedback =====
+    // STEP 4: Read DATA -- arrives after middleman gets feedback
     inData.read(dataBuf);
 
-    // ===== STEP 5: Extract PSDU using lip from in[0] header =====
-    // in[0] layout per pkt: [lip_lo(1) | lip_hi(1) | PPDU(lip bytes)]
-    // PPDU layout:          SIGNAL(3)  + SERVICE(2) + PSDU + TAIL_PAD
-    // PSDU offset inside PPDU = 5 bytes
-    // PSDU offset inside in[0] = 2 (lip header) + 5 (SIGNAL+SERVICE) = 7
+    // STEP 5: Extract PSDU using EXACT lip_bits
     for (int i = 0; i < actualCount; i++) {
         const int dataOff = i * inDataPkt;
         const int psduOff = i * outPsduPkt;
 
-        uint8_t lipLo = (uint8_t)((int32_t)dataBuf[dataOff + 0] + 128);
-        uint8_t lipHi = (uint8_t)((int32_t)dataBuf[dataOff + 1] + 128);
-        int lip = (int)lipLo | ((int)lipHi << 8);
-        if (lip > 1515) lip = 1515;
-        if (lip < 5)    lip = 5;
+        // Read lip_bits from header bytes [0..3] - EXACT bits
+        uint8_t b0 = (uint8_t)((int32_t)dataBuf[dataOff + 0] + 128);
+        uint8_t b1 = (uint8_t)((int32_t)dataBuf[dataOff + 1] + 128);
+        uint8_t b2 = (uint8_t)((int32_t)dataBuf[dataOff + 2] + 128);
+        uint8_t b3 = (uint8_t)((int32_t)dataBuf[dataOff + 3] + 128);
+        uint32_t lipBits = (uint32_t)b0 | ((uint32_t)b1 << 8)
+                         | ((uint32_t)b2 << 16) | ((uint32_t)b3 << 24);
 
-        // PSDU = lip - 5 bytes (skip SIGNAL+SERVICE), capped at 1504
-        int psduLen = lip - 5;
-        if (psduLen < 0)         psduLen = 0;
+        int lipBitCount  = (int)lipBits;  // EXACT bits
+        int lipByteCount = (lipBitCount + 7) / 8;
+
+        if (lipByteCount > 1515) lipByteCount = 1515;
+        if (lipByteCount < 5)    lipByteCount = 5;
+
+        // PSDU = lip_bytes - 5 (SIGNAL 3B + SERVICE 2B), capped at 1504
+        int psduLen = lipByteCount - 5;
+        if (psduLen < 0)          psduLen = 0;
         if (psduLen > outPsduPkt) psduLen = outPsduPkt;
 
-        // Copy from in[0] offset 7 (= 2 header + 5 SIGNAL+SERVICE)
-        memcpy(psduBuf + psduOff, dataBuf + dataOff + 7, psduLen);
+        // Copy from offset 9 = 4 (lip header) + 5 (SIGNAL+SERVICE)
+        memcpy(psduBuf + psduOff, dataBuf + dataOff + 9, psduLen);
+
+        if (isFirstBatch && i == 0) {
+            int signalBitsIn = 24;
+            int dataBitsIn   = lipBitCount - signalBitsIn;
+            int outputBits   = psduLen * 8;
+            printf("[PpduDecapsulate] pkt[0] INPUT : signal=%d  data=%d  total=%d bits\n",
+                   signalBitsIn, dataBitsIn, lipBitCount);
+            printf("[PpduDecapsulate] pkt[0] OUTPUT: %d bits (PSDU)\n", outputBits);
+            fflush(stdout);
+        }
     }
 
-    // ===== STEP 6: Send PSDU =====
+
+
+    // STEP 6: Send PSDU
     outPsdu.write(psduBuf, actualCount);
 
     customData.frameCount += actualCount;
@@ -170,14 +191,15 @@ int main(int argc, char* argv[]) {
         "PpduDecapsulate",
         2,               // inputs
         2,               // outputs
-        {1517, 3},       // inputPacketSizes  [lip+DATA(1517)@[0], SIGNAL(3)@[1]]
-        {64, 64},    // inputBatchSizes
+        {1519, 3},       // inputPacketSizes  [lip_bits(uint32 LE)+DATA(1515)=1519@[0], SIGNAL(3)@[1]]
+        {64, 64},        // inputBatchSizes
         {1504, 3},       // outputPacketSizes [PSDU(1504)@[0], feedback(3)@[1]]
-        {64, 64},    // outputBatchSizes
+        {64, 64},        // outputBatchSizes
         true,            // ltr
         true,            // startWithAll
-        "PPDU decap: SIGNAL->feedback->DATA; PSDU sliced using lip from in[0] header"
+        "PPDU decap: exact bit counts (including fractional bytes)"
     };
+
 
     run_manual_block(pipeIns, pipeOuts, config, process_ppdu_decapsulate, init_ppdu_decapsulate);
     return 0;

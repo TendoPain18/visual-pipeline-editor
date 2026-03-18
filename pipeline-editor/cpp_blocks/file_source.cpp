@@ -252,6 +252,14 @@ void process_file_source(
     customData.ring.consume(peeked);
 
     output.write(outputBatch, numPackets);
+
+    static bool firstBatch = true;
+    if (firstBatch && numPackets > 0) {
+        firstBatch = false;
+        printf("[FileSource] pkt[0] OUTPUT: %d bits\n", PACKET_SIZE * 8);
+        fflush(stdout);
+    }
+
     delete[] outputBatch;
 }
 
