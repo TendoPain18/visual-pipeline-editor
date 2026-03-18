@@ -47,7 +47,6 @@ export const useServerOperations = ({
       }
 
       if (!mexExists) {
-        // Check if pipeline_mex.cpp exists
         const cppSourcePath = `${projectDir}/cpp/pipeline_mex.cpp`;
         let sourceExists = false;
         try {
@@ -71,7 +70,7 @@ export const useServerOperations = ({
         }
       }
 
-      // Check if pipe_server.exe exists
+      // Check if pipe_server.exe exists (socket version)
       const serverPath = `${projectDir}/cpp/pipe_server.exe`;
       let serverExists = false;
       try {
@@ -83,7 +82,6 @@ export const useServerOperations = ({
       }
 
       if (!serverExists) {
-        // Check if pipe_server.cpp exists
         const cppSourcePath = `${projectDir}/cpp/pipe_server.cpp`;
         let sourceExists = false;
         try {
@@ -94,16 +92,16 @@ export const useServerOperations = ({
         }
 
         if (sourceExists) {
-          addLog('info', 'Found pipe_server.cpp - compiling...');
+          addLog('info', 'Found pipe_server.cpp - compiling with socket support...');
           const cppResult = await window.electronAPI.execCommand(
-            'g++ -o pipe_server.exe pipe_server.cpp -lkernel32 -O2',
+            'g++ -o pipe_server.exe pipe_server.cpp -lws2_32 -O2',
             `${projectDir}/cpp`
           );
 
           if (!cppResult.success) {
             throw new Error(`Pipe server compilation failed:\n${cppResult.stderr || cppResult.error}\n\nMake sure g++ is installed and in your PATH.`);
           }
-          addLog('success', 'Pipe server compiled successfully');
+          addLog('success', 'Pipe server compiled successfully with socket support');
         }
       }
 
@@ -116,7 +114,6 @@ export const useServerOperations = ({
       connections.forEach((conn, i) => {
         const fromBlock = sortedBlocks.find(b => b.id === conn.fromBlock);
         
-        // Get size for specific output port
         let size = 67108864; // default 64MB
         if (fromBlock) {
           if (Array.isArray(fromBlock.outputSize)) {
@@ -129,10 +126,11 @@ export const useServerOperations = ({
         serverCmd += ` ${pipes[i]} ${size}`;
       });
 
-      addLog('info', `Starting parameterized pipe server...`);
+      addLog('info', `Starting parameterized pipe server with socket communication...`);
       addLog('info', `Command: ${serverCmd}`);
       
-      const serverProc = await window.electronAPI.startProcess(
+      // Use the new socket-enabled server start
+      const serverProc = await window.electronAPI.startServerWithSocket(
         serverCmd,
         `${projectDir}/cpp`,
         'server'
@@ -147,7 +145,8 @@ export const useServerOperations = ({
         ...prev, 
         server: { pid: serverProc.pid, status: 'running', name: 'server' } 
       }));
-      addLog('success', `Pipe server started (PID: ${serverProc.pid})`);
+      addLog('success', `Pipe server started with socket communication (PID: ${serverProc.pid})`);
+      addLog('info', 'Waiting for socket connection...');
       
     } catch (err) {
       addLog('error', `Server start failed: ${err.message}`);
@@ -194,7 +193,6 @@ export const useServerOperations = ({
     return matlabCmd;
   };
 
-  // Helper function to wait for a block to become ready
   const waitForBlockReady = (blockId, blockName, setBlockProcesses, timeout = 30000) => {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
@@ -281,7 +279,6 @@ export const useServerOperations = ({
             }));
             addLog('info', `${block.name} process launched (PID: ${procResult.pid}), waiting for BLOCK_READY...`);
             
-            // Wait for this block to be ready before starting the next one
             try {
               await waitForBlockReady(block.id, block.name, setBlockProcesses);
               addLog('success', `✓ ${block.name} is READY`);
@@ -365,9 +362,7 @@ export const useServerOperations = ({
       return;
     }
 
-    try {
-      addLog('info', `Manually starting block: ${block.name}`);
-      
+    try {      
       const sortedBlocks = topologicalSort(blocks, connections);
 
       await window.electronAPI.writeFile(

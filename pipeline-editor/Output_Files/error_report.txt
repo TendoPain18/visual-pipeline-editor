@@ -1,25 +1,11 @@
 ========================================
 FILE TRANSMISSION ERROR REPORT
 ========================================
-Generated: 14-Feb-2026 08:47:54
-Total files: 3
+Generated: 15-Feb-2026 03:13:00
+Total files: 1
 ========================================
 
 File 1: text.txt [COMPLETE]
-  Expected Size: 5.32 KB
-  Actual Size:   5.32 KB
-  Packets:       5
-  Errors:        4
-  Error Rate:    80.00%
-
-File 2: text.txt [COMPLETE]
-  Expected Size: 5.32 KB
-  Actual Size:   5.32 KB
-  Packets:       5
-  Errors:        0
-  Error Rate:    0.00%
-
-File 3: text.txt [COMPLETE]
   Expected Size: 5.32 KB
   Actual Size:   5.32 KB
   Packets:       5
@@ -29,8 +15,8 @@ File 3: text.txt [COMPLETE]
 ========================================
 SUMMARY
 ========================================
-Complete files:   3 / 3
-Total packets:    15
-Total errors:     4
-Overall error rate: 26.67%
+Complete files:   1 / 1
+Total packets:    5
+Total errors:     0
+Overall error rate: 0.00%
 ========================================

@@ -1,5 +1,5 @@
 function file_sink(pipeIn)
-% FILE_SINK - Continuous file reception with batch reporting
+% FILE_SINK - Continuous file reception (SOCKET-ONLY VERSION)
 %
 % @BlockConfig
 % name: FileSink
@@ -9,20 +9,30 @@ function file_sink(pipeIn)
 % outputSize: 0
 % LTR: false
 % startWithAll: true
+% socketHost: localhost
+% socketPort: 9001
 % outputDirectory: C:\Users\amrga\Downloads\final\pipeline-editor\Output_Files
 % reportFile: error_report.txt
 % description: File sink - receives multiple batches, reports after each batch
 % @EndBlockConfig
 
     config = parse_block_config();
-    send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
+    
+    % SOCKET CONNECTION (REQUIRED)
+    socketObj = matlab_socket_client(config.socketHost, config.socketPort, 10);
+    
+    if isempty(socketObj)
+        error('Failed to connect to socket server. Make sure Electron is running!');
+    end
+    
+    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
     
     try
         if ~exist(config.outputDirectory, 'dir')
             mkdir(config.outputDirectory);
         end
         
-        send_protocol_message('BLOCK_READY', config.blockId, config.name, '');
+        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
         
         packetCount = 0;
         totalBytes = 0;
@@ -41,26 +51,23 @@ function file_sink(pipeIn)
             try
                 packet = pipeline_mex('read', pipeIn, config.inputSize);
             catch ME
-                % Pipeline closed - save any incomplete file and generate final report
+                % Pipeline closed
                 fprintf('\n========================================\n');
                 fprintf('PIPELINE CLOSED\n');
                 fprintf('========================================\n');
                 
-                if currentFile.active
+                if currentFile.active && ~isempty(currentFile.data)
                     fprintf('Saving incomplete file: %s\n', currentFile.name);
-                    if ~isempty(currentFile.data)
-                        save_file(currentFile, config.outputDirectory);
-                        fileStats{end+1} = struct('name', currentFile.name, ...
-                                                  'size', length(currentFile.data), ...
-                                                  'expected', currentFile.size, ...
-                                                  'errors', currentFile.errors, ...
-                                                  'packets', currentFile.packets, ...
-                                                  'complete', false);
-                        totalErrors = totalErrors + currentFile.errors;
-                    end
+                    save_file(currentFile, config.outputDirectory);
+                    fileStats{end+1} = struct('name', currentFile.name, ...
+                                              'size', length(currentFile.data), ...
+                                              'expected', currentFile.size, ...
+                                              'errors', currentFile.errors, ...
+                                              'packets', currentFile.packets, ...
+                                              'complete', false);
+                    totalErrors = totalErrors + currentFile.errors;
                 end
                 
-                % Generate final error report
                 fprintf('Generating final error report...\n');
                 generate_error_report(fileStats, config.outputDirectory, config.reportFile);
                 
@@ -73,6 +80,8 @@ function file_sink(pipeIn)
                 fprintf('Total data:           %.2f MB\n', totalBytes/1e6);
                 fprintf('========================================\n');
                 
+                send_socket_message(socketObj, 'BLOCK_STOPPED', config.blockId, config.name, '');
+                clear socketObj;
                 return;
             end
             
@@ -82,18 +91,14 @@ function file_sink(pipeIn)
             packetCount = packetCount + 1;
             totalBytes = totalBytes + 1500;
             
-            % Convert int8 back to uint8 properly (add 128)
             dataBytes = uint8(int32(data) + 128);
             
-            % Check for START marker
             isStart = (dataBytes(1) == 0x53 && dataBytes(2) == 0x54 && ...
                       dataBytes(3) == 0x41 && dataBytes(4) == 0x52);
             
-            % Check for header
             isHeader = (dataBytes(1) == 0x46 && dataBytes(2) == 0x49 && ...
                        dataBytes(3) == 0x4C && dataBytes(4) == 0x45);
             
-            % Check for END marker
             isEnd = (dataBytes(1) == 0x45 && dataBytes(2) == 0x4E && ...
                     dataBytes(3) == 0x44 && dataBytes(4) == 0x00);
             
@@ -105,9 +110,7 @@ function file_sink(pipeIn)
             if isEnd
                 fprintf('--- END marker received ---\n');
                 
-                % Save current file if active
                 if currentFile.active
-                    % Check if file was complete
                     if length(currentFile.data) >= currentFile.size
                         currentFile.data = currentFile.data(1:currentFile.size);
                         save_file(currentFile, config.outputDirectory);
@@ -120,7 +123,6 @@ function file_sink(pipeIn)
                         totalErrors = totalErrors + currentFile.errors;
                         fprintf('  File complete and saved: %s\n', currentFile.name);
                     else
-                        % Incomplete file
                         save_file(currentFile, config.outputDirectory);
                         fileStats{end+1} = struct('name', currentFile.name, ...
                                                   'size', length(currentFile.data), ...
@@ -133,13 +135,10 @@ function file_sink(pipeIn)
                                 currentFile.name, length(currentFile.data), currentFile.size);
                     end
                     
-                    % Generate updated error report
                     generate_error_report(fileStats, config.outputDirectory, config.reportFile);
-                    
                     currentFile.active = false;
                 end
                 
-                % Update metrics after END marker
                 currentTime = toc(startTime);
                 elapsed = currentTime - lastTime;
                 if elapsed > 0
@@ -154,16 +153,14 @@ function file_sink(pipeIn)
                 metrics.frames = packetCount;
                 metrics.gbps = instantGbps;
                 metrics.totalGB = totalBytes / 1e9;
-                send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+                send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
                 
                 fprintf('Total files received: %d, Total packets: %d\n\n', ...
                         length(fileStats), packetCount);
-                
                 continue;
             end
             
             if isHeader
-                % Save previous file
                 if currentFile.active
                     save_file(currentFile, config.outputDirectory);
                     fileStats{end+1} = struct('name', currentFile.name, ...
@@ -175,7 +172,6 @@ function file_sink(pipeIn)
                     totalErrors = totalErrors + currentFile.errors;
                 end
                 
-                % Parse header
                 nameLen = bitor(uint16(dataBytes(5)), bitshift(uint16(dataBytes(6)), 8));
                 fileName = char(dataBytes(7:6+nameLen)');
                 
@@ -184,7 +180,6 @@ function file_sink(pipeIn)
                     fileSize = bitor(fileSize, bitshift(uint64(dataBytes(7+nameLen+i)), 8*i));
                 end
                 
-                % Start new file
                 currentFile.active = true;
                 currentFile.name = fileName;
                 currentFile.size = double(fileSize);
@@ -198,7 +193,6 @@ function file_sink(pipeIn)
                 currentFile.packets = currentFile.packets + 1;
                 
             else
-                % Data packet
                 if currentFile.active
                     currentFile.data = [currentFile.data; data];
                     currentFile.packets = currentFile.packets + 1;
@@ -209,7 +203,6 @@ function file_sink(pipeIn)
                 end
             end
             
-            % Metrics
             currentTime = toc(startTime);
             elapsed = currentTime - lastTime;
             if elapsed > 0
@@ -224,24 +217,23 @@ function file_sink(pipeIn)
             metrics.frames = packetCount;
             metrics.gbps = instantGbps;
             metrics.totalGB = totalBytes / 1e9;
-            send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
         end
         
     catch ME
-        send_protocol_message('BLOCK_ERROR', config.blockId, config.name, ME.message);
+        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
+        clear socketObj;
         rethrow(ME);
     end
 end
 
 function save_file(fileInfo, outputDir)
     filePath = fullfile(outputDir, fileInfo.name);
-    
     fid = fopen(filePath, 'wb');
     if fid == -1
         fprintf('ERROR: Cannot create: %s\n', filePath);
         return;
     end
-    % Convert int8 back to uint8 by adding 128
     dataBytes = uint8(int32(fileInfo.data) + 128);
     fwrite(fid, dataBytes);
     fclose(fid);

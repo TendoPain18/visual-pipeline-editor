@@ -177,946 +177,9 @@ export default defineConfig({
   }
 });
 
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\config ---
-[core]
-	repositoryformatversion = 0
-	filemode = false
-	bare = false
-	logallrefupdates = true
-	symlinks = false
-	ignorecase = true
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\description ---
-Unnamed repository; edit this file 'description' to name the repository.
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\HEAD ---
-ref: refs/heads/main
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\applypatch-msg.sample ---
-#!/bin/sh
-#
-# An example hook script to check the commit log message taken by
-# applypatch from an e-mail message.
-#
-# The hook should exit with non-zero status after issuing an
-# appropriate message if it wants to stop the commit.  The hook is
-# allowed to edit the commit message file.
-#
-# To enable this hook, rename this file to "applypatch-msg".
-
-. git-sh-setup
-commitmsg="$(git rev-parse --git-path hooks/commit-msg)"
-test -x "$commitmsg" && exec "$commitmsg" ${1+"$@"}
-:
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\commit-msg.sample ---
-#!/bin/sh
-#
-# An example hook script to check the commit log message.
-# Called by "git commit" with one argument, the name of the file
-# that has the commit message.  The hook should exit with non-zero
-# status after issuing an appropriate message if it wants to stop the
-# commit.  The hook is allowed to edit the commit message file.
-#
-# To enable this hook, rename this file to "commit-msg".
-
-# Uncomment the below to add a Signed-off-by line to the message.
-# Doing this in a hook is a bad idea in general, but the prepare-commit-msg
-# hook is more suited to it.
-#
-# SOB=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
-# grep -qs "^$SOB" "$1" || echo "$SOB" >> "$1"
-
-# This example catches duplicate Signed-off-by lines.
-
-test "" = "$(grep '^Signed-off-by: ' "$1" |
-	 sort | uniq -c | sed -e '/^[ 	]*1[ 	]/d')" || {
-	echo >&2 Duplicate Signed-off-by lines.
-	exit 1
-}
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\fsmonitor-watchman.sample ---
-#!/usr/bin/perl
-
-use strict;
-use warnings;
-use IPC::Open2;
-
-# An example hook script to integrate Watchman
-# (https://facebook.github.io/watchman/) with git to speed up detecting
-# new and modified files.
-#
-# The hook is passed a version (currently 2) and last update token
-# formatted as a string and outputs to stdout a new update token and
-# all files that have been modified since the update token. Paths must
-# be relative to the root of the working tree and separated by a single NUL.
-#
-# To enable this hook, rename this file to "query-watchman" and set
-# 'git config core.fsmonitor .git/hooks/query-watchman'
-#
-my ($version, $last_update_token) = @ARGV;
-
-# Uncomment for debugging
-# print STDERR "$0 $version $last_update_token\n";
-
-# Check the hook interface version
-if ($version ne 2) {
-	die "Unsupported query-fsmonitor hook version '$version'.\n" .
-	    "Falling back to scanning...\n";
-}
-
-my $git_work_tree = get_working_dir();
-
-my $retry = 1;
-
-my $json_pkg;
-eval {
-	require JSON::XS;
-	$json_pkg = "JSON::XS";
-	1;
-} or do {
-	require JSON::PP;
-	$json_pkg = "JSON::PP";
-};
-
-launch_watchman();
-
-sub launch_watchman {
-	my $o = watchman_query();
-	if (is_work_tree_watched($o)) {
-		output_result($o->{clock}, @{$o->{files}});
-	}
-}
-
-sub output_result {
-	my ($clockid, @files) = @_;
-
-	# Uncomment for debugging watchman output
-	# open (my $fh, ">", ".git/watchman-output.out");
-	# binmode $fh, ":utf8";
-	# print $fh "$clockid\n@files\n";
-	# close $fh;
-
-	binmode STDOUT, ":utf8";
-	print $clockid;
-	print "\0";
-	local $, = "\0";
-	print @files;
-}
-
-sub watchman_clock {
-	my $response = qx/watchman clock "$git_work_tree"/;
-	die "Failed to get clock id on '$git_work_tree'.\n" .
-		"Falling back to scanning...\n" if $? != 0;
-
-	return $json_pkg->new->utf8->decode($response);
-}
-
-sub watchman_query {
-	my $pid = open2(\*CHLD_OUT, \*CHLD_IN, 'watchman -j --no-pretty')
-	or die "open2() failed: $!\n" .
-	"Falling back to scanning...\n";
-
-	# In the query expression below we're asking for names of files that
-	# changed since $last_update_token but not from the .git folder.
-	#
-	# To accomplish this, we're using the "since" generator to use the
-	# recency index to select candidate nodes and "fields" to limit the
-	# output to file names only. Then we're using the "expression" term to
-	# further constrain the results.
-	my $last_update_line = "";
-	if (substr($last_update_token, 0, 1) eq "c") {
-		$last_update_token = "\"$last_update_token\"";
-		$last_update_line = qq[\n"since": $last_update_token,];
-	}
-	my $query = <<"	END";
-		["query", "$git_work_tree", {$last_update_line
-			"fields": ["name"],
-			"expression": ["not", ["dirname", ".git"]]
-		}]
-	END
-
-	# Uncomment for debugging the watchman query
-	# open (my $fh, ">", ".git/watchman-query.json");
-	# print $fh $query;
-	# close $fh;
-
-	print CHLD_IN $query;
-	close CHLD_IN;
-	my $response = do {local $/; <CHLD_OUT>};
-
-	# Uncomment for debugging the watch response
-	# open ($fh, ">", ".git/watchman-response.json");
-	# print $fh $response;
-	# close $fh;
-
-	die "Watchman: command returned no output.\n" .
-	"Falling back to scanning...\n" if $response eq "";
-	die "Watchman: command returned invalid output: $response\n" .
-	"Falling back to scanning...\n" unless $response =~ /^\{/;
-
-	return $json_pkg->new->utf8->decode($response);
-}
-
-sub is_work_tree_watched {
-	my ($output) = @_;
-	my $error = $output->{error};
-	if ($retry > 0 and $error and $error =~ m/unable to resolve root .* directory (.*) is not watched/) {
-		$retry--;
-		my $response = qx/watchman watch "$git_work_tree"/;
-		die "Failed to make watchman watch '$git_work_tree'.\n" .
-		    "Falling back to scanning...\n" if $? != 0;
-		$output = $json_pkg->new->utf8->decode($response);
-		$error = $output->{error};
-		die "Watchman: $error.\n" .
-		"Falling back to scanning...\n" if $error;
-
-		# Uncomment for debugging watchman output
-		# open (my $fh, ">", ".git/watchman-output.out");
-		# close $fh;
-
-		# Watchman will always return all files on the first query so
-		# return the fast "everything is dirty" flag to git and do the
-		# Watchman query just to get it over with now so we won't pay
-		# the cost in git to look up each individual file.
-		my $o = watchman_clock();
-		$error = $output->{error};
-
-		die "Watchman: $error.\n" .
-		"Falling back to scanning...\n" if $error;
-
-		output_result($o->{clock}, ("/"));
-		$last_update_token = $o->{clock};
-
-		eval { launch_watchman() };
-		return 0;
-	}
-
-	die "Watchman: $error.\n" .
-	"Falling back to scanning...\n" if $error;
-
-	return 1;
-}
-
-sub get_working_dir {
-	my $working_dir;
-	if ($^O =~ 'msys' || $^O =~ 'cygwin') {
-		$working_dir = Win32::GetCwd();
-		$working_dir =~ tr/\\/\//;
-	} else {
-		require Cwd;
-		$working_dir = Cwd::cwd();
-	}
-
-	return $working_dir;
-}
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\post-update.sample ---
-#!/bin/sh
-#
-# An example hook script to prepare a packed repository for use over
-# dumb transports.
-#
-# To enable this hook, rename this file to "post-update".
-
-exec git update-server-info
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\pre-applypatch.sample ---
-#!/bin/sh
-#
-# An example hook script to verify what is about to be committed
-# by applypatch from an e-mail message.
-#
-# The hook should exit with non-zero status after issuing an
-# appropriate message if it wants to stop the commit.
-#
-# To enable this hook, rename this file to "pre-applypatch".
-
-. git-sh-setup
-precommit="$(git rev-parse --git-path hooks/pre-commit)"
-test -x "$precommit" && exec "$precommit" ${1+"$@"}
-:
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\pre-commit.sample ---
-#!/bin/sh
-#
-# An example hook script to verify what is about to be committed.
-# Called by "git commit" with no arguments.  The hook should
-# exit with non-zero status after issuing an appropriate message if
-# it wants to stop the commit.
-#
-# To enable this hook, rename this file to "pre-commit".
-
-if git rev-parse --verify HEAD >/dev/null 2>&1
-then
-	against=HEAD
-else
-	# Initial commit: diff against an empty tree object
-	against=$(git hash-object -t tree /dev/null)
-fi
-
-# If you want to allow non-ASCII filenames set this variable to true.
-allownonascii=$(git config --type=bool hooks.allownonascii)
-
-# Redirect output to stderr.
-exec 1>&2
-
-# Cross platform projects tend to avoid non-ASCII filenames; prevent
-# them from being added to the repository. We exploit the fact that the
-# printable range starts at the space character and ends with tilde.
-if [ "$allownonascii" != "true" ] &&
-	# Note that the use of brackets around a tr range is ok here, (it's
-	# even required, for portability to Solaris 10's /usr/bin/tr), since
-	# the square bracket bytes happen to fall in the designated range.
-	test $(git diff-index --cached --name-only --diff-filter=A -z $against |
-	  LC_ALL=C tr -d '[ -~]\0' | wc -c) != 0
-then
-	cat <<\EOF
-Error: Attempt to add a non-ASCII file name.
-
-This can cause problems if you want to work with people on other platforms.
-
-To be portable it is advisable to rename the file.
-
-If you know what you are doing you can disable this check using:
-
-  git config hooks.allownonascii true
-EOF
-	exit 1
-fi
-
-# If there are whitespace errors, print the offending file names and fail.
-exec git diff-index --check --cached $against --
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\pre-merge-commit.sample ---
-#!/bin/sh
-#
-# An example hook script to verify what is about to be committed.
-# Called by "git merge" with no arguments.  The hook should
-# exit with non-zero status after issuing an appropriate message to
-# stderr if it wants to stop the merge commit.
-#
-# To enable this hook, rename this file to "pre-merge-commit".
-
-. git-sh-setup
-test -x "$GIT_DIR/hooks/pre-commit" &&
-        exec "$GIT_DIR/hooks/pre-commit"
-:
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\pre-push.sample ---
-#!/bin/sh
-
-# An example hook script to verify what is about to be pushed.  Called by "git
-# push" after it has checked the remote status, but before anything has been
-# pushed.  If this script exits with a non-zero status nothing will be pushed.
-#
-# This hook is called with the following parameters:
-#
-# $1 -- Name of the remote to which the push is being done
-# $2 -- URL to which the push is being done
-#
-# If pushing without using a named remote those arguments will be equal.
-#
-# Information about the commits which are being pushed is supplied as lines to
-# the standard input in the form:
-#
-#   <local ref> <local oid> <remote ref> <remote oid>
-#
-# This sample shows how to prevent push of commits where the log message starts
-# with "WIP" (work in progress).
-
-remote="$1"
-url="$2"
-
-zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
-
-while read local_ref local_oid remote_ref remote_oid
-do
-	if test "$local_oid" = "$zero"
-	then
-		# Handle delete
-		:
-	else
-		if test "$remote_oid" = "$zero"
-		then
-			# New branch, examine all commits
-			range="$local_oid"
-		else
-			# Update to existing branch, examine new commits
-			range="$remote_oid..$local_oid"
-		fi
-
-		# Check for WIP commit
-		commit=$(git rev-list -n 1 --grep '^WIP' "$range")
-		if test -n "$commit"
-		then
-			echo >&2 "Found WIP commit in $local_ref, not pushing"
-			exit 1
-		fi
-	fi
-done
-
-exit 0
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\pre-rebase.sample ---
-#!/bin/sh
-#
-# Copyright (c) 2006, 2008 Junio C Hamano
-#
-# The "pre-rebase" hook is run just before "git rebase" starts doing
-# its job, and can prevent the command from running by exiting with
-# non-zero status.
-#
-# The hook is called with the following parameters:
-#
-# $1 -- the upstream the series was forked from.
-# $2 -- the branch being rebased (or empty when rebasing the current branch).
-#
-# This sample shows how to prevent topic branches that are already
-# merged to 'next' branch from getting rebased, because allowing it
-# would result in rebasing already published history.
-
-publish=next
-basebranch="$1"
-if test "$#" = 2
-then
-	topic="refs/heads/$2"
-else
-	topic=`git symbolic-ref HEAD` ||
-	exit 0 ;# we do not interrupt rebasing detached HEAD
-fi
-
-case "$topic" in
-refs/heads/??/*)
-	;;
-*)
-	exit 0 ;# we do not interrupt others.
-	;;
-esac
-
-# Now we are dealing with a topic branch being rebased
-# on top of master.  Is it OK to rebase it?
-
-# Does the topic really exist?
-git show-ref -q "$topic" || {
-	echo >&2 "No such branch $topic"
-	exit 1
-}
-
-# Is topic fully merged to master?
-not_in_master=`git rev-list --pretty=oneline ^master "$topic"`
-if test -z "$not_in_master"
-then
-	echo >&2 "$topic is fully merged to master; better remove it."
-	exit 1 ;# we could allow it, but there is no point.
-fi
-
-# Is topic ever merged to next?  If so you should not be rebasing it.
-only_next_1=`git rev-list ^master "^$topic" ${publish} | sort`
-only_next_2=`git rev-list ^master           ${publish} | sort`
-if test "$only_next_1" = "$only_next_2"
-then
-	not_in_topic=`git rev-list "^$topic" master`
-	if test -z "$not_in_topic"
-	then
-		echo >&2 "$topic is already up to date with master"
-		exit 1 ;# we could allow it, but there is no point.
-	else
-		exit 0
-	fi
-else
-	not_in_next=`git rev-list --pretty=oneline ^${publish} "$topic"`
-	/usr/bin/perl -e '
-		my $topic = $ARGV[0];
-		my $msg = "* $topic has commits already merged to public branch:\n";
-		my (%not_in_next) = map {
-			/^([0-9a-f]+) /;
-			($1 => 1);
-		} split(/\n/, $ARGV[1]);
-		for my $elem (map {
-				/^([0-9a-f]+) (.*)$/;
-				[$1 => $2];
-			} split(/\n/, $ARGV[2])) {
-			if (!exists $not_in_next{$elem->[0]}) {
-				if ($msg) {
-					print STDERR $msg;
-					undef $msg;
-				}
-				print STDERR " $elem->[1]\n";
-			}
-		}
-	' "$topic" "$not_in_next" "$not_in_master"
-	exit 1
-fi
-
-<<\DOC_END
-
-This sample hook safeguards topic branches that have been
-published from being rewound.
-
-The workflow assumed here is:
-
- * Once a topic branch forks from "master", "master" is never
-   merged into it again (either directly or indirectly).
-
- * Once a topic branch is fully cooked and merged into "master",
-   it is deleted.  If you need to build on top of it to correct
-   earlier mistakes, a new topic branch is created by forking at
-   the tip of the "master".  This is not strictly necessary, but
-   it makes it easier to keep your history simple.
-
- * Whenever you need to test or publish your changes to topic
-   branches, merge them into "next" branch.
-
-The script, being an example, hardcodes the publish branch name
-to be "next", but it is trivial to make it configurable via
-$GIT_DIR/config mechanism.
-
-With this workflow, you would want to know:
-
-(1) ... if a topic branch has ever been merged to "next".  Young
-    topic branches can have stupid mistakes you would rather
-    clean up before publishing, and things that have not been
-    merged into other branches can be easily rebased without
-    affecting other people.  But once it is published, you would
-    not want to rewind it.
-
-(2) ... if a topic branch has been fully merged to "master".
-    Then you can delete it.  More importantly, you should not
-    build on top of it -- other people may already want to
-    change things related to the topic as patches against your
-    "master", so if you need further changes, it is better to
-    fork the topic (perhaps with the same name) afresh from the
-    tip of "master".
-
-Let's look at this example:
-
-		   o---o---o---o---o---o---o---o---o---o "next"
-		  /       /           /           /
-		 /   a---a---b A     /           /
-		/   /               /           /
-	       /   /   c---c---c---c B         /
-	      /   /   /             \         /
-	     /   /   /   b---b C     \       /
-	    /   /   /   /             \     /
-    ---o---o---o---o---o---o---o---o---o---o---o "master"
-
-
-A, B and C are topic branches.
-
- * A has one fix since it was merged up to "next".
-
- * B has finished.  It has been fully merged up to "master" and "next",
-   and is ready to be deleted.
-
- * C has not merged to "next" at all.
-
-We would want to allow C to be rebased, refuse A, and encourage
-B to be deleted.
-
-To compute (1):
-
-	git rev-list ^master ^topic next
-	git rev-list ^master        next
-
-	if these match, topic has not merged in next at all.
-
-To compute (2):
-
-	git rev-list master..topic
-
-	if this is empty, it is fully merged to "master".
-
-DOC_END
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\pre-receive.sample ---
-#!/bin/sh
-#
-# An example hook script to make use of push options.
-# The example simply echoes all push options that start with 'echoback='
-# and rejects all pushes when the "reject" push option is used.
-#
-# To enable this hook, rename this file to "pre-receive".
-
-if test -n "$GIT_PUSH_OPTION_COUNT"
-then
-	i=0
-	while test "$i" -lt "$GIT_PUSH_OPTION_COUNT"
-	do
-		eval "value=\$GIT_PUSH_OPTION_$i"
-		case "$value" in
-		echoback=*)
-			echo "echo from the pre-receive-hook: ${value#*=}" >&2
-			;;
-		reject)
-			exit 1
-		esac
-		i=$((i + 1))
-	done
-fi
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\prepare-commit-msg.sample ---
-#!/bin/sh
-#
-# An example hook script to prepare the commit log message.
-# Called by "git commit" with the name of the file that has the
-# commit message, followed by the description of the commit
-# message's source.  The hook's purpose is to edit the commit
-# message file.  If the hook fails with a non-zero status,
-# the commit is aborted.
-#
-# To enable this hook, rename this file to "prepare-commit-msg".
-
-# This hook includes three examples. The first one removes the
-# "# Please enter the commit message..." help message.
-#
-# The second includes the output of "git diff --name-status -r"
-# into the message, just before the "git status" output.  It is
-# commented because it doesn't cope with --amend or with squashed
-# commits.
-#
-# The third example adds a Signed-off-by line to the message, that can
-# still be edited.  This is rarely a good idea.
-
-COMMIT_MSG_FILE=$1
-COMMIT_SOURCE=$2
-SHA1=$3
-
-/usr/bin/perl -i.bak -ne 'print unless(m/^. Please enter the commit message/..m/^#$/)' "$COMMIT_MSG_FILE"
-
-# case "$COMMIT_SOURCE,$SHA1" in
-#  ,|template,)
-#    /usr/bin/perl -i.bak -pe '
-#       print "\n" . `git diff --cached --name-status -r`
-# 	 if /^#/ && $first++ == 0' "$COMMIT_MSG_FILE" ;;
-#  *) ;;
-# esac
-
-# SOB=$(git var GIT_COMMITTER_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
-# git interpret-trailers --in-place --trailer "$SOB" "$COMMIT_MSG_FILE"
-# if test -z "$COMMIT_SOURCE"
-# then
-#   /usr/bin/perl -i.bak -pe 'print "\n" if !$first_line++' "$COMMIT_MSG_FILE"
-# fi
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\push-to-checkout.sample ---
-#!/bin/sh
-
-# An example hook script to update a checked-out tree on a git push.
-#
-# This hook is invoked by git-receive-pack(1) when it reacts to git
-# push and updates reference(s) in its repository, and when the push
-# tries to update the branch that is currently checked out and the
-# receive.denyCurrentBranch configuration variable is set to
-# updateInstead.
-#
-# By default, such a push is refused if the working tree and the index
-# of the remote repository has any difference from the currently
-# checked out commit; when both the working tree and the index match
-# the current commit, they are updated to match the newly pushed tip
-# of the branch. This hook is to be used to override the default
-# behaviour; however the code below reimplements the default behaviour
-# as a starting point for convenient modification.
-#
-# The hook receives the commit with which the tip of the current
-# branch is going to be updated:
-commit=$1
-
-# It can exit with a non-zero status to refuse the push (when it does
-# so, it must not modify the index or the working tree).
-die () {
-	echo >&2 "$*"
-	exit 1
-}
-
-# Or it can make any necessary changes to the working tree and to the
-# index to bring them to the desired state when the tip of the current
-# branch is updated to the new commit, and exit with a zero status.
-#
-# For example, the hook can simply run git read-tree -u -m HEAD "$1"
-# in order to emulate git fetch that is run in the reverse direction
-# with git push, as the two-tree form of git read-tree -u -m is
-# essentially the same as git switch or git checkout that switches
-# branches while keeping the local changes in the working tree that do
-# not interfere with the difference between the branches.
-
-# The below is a more-or-less exact translation to shell of the C code
-# for the default behaviour for git's push-to-checkout hook defined in
-# the push_to_deploy() function in builtin/receive-pack.c.
-#
-# Note that the hook will be executed from the repository directory,
-# not from the working tree, so if you want to perform operations on
-# the working tree, you will have to adapt your code accordingly, e.g.
-# by adding "cd .." or using relative paths.
-
-if ! git update-index -q --ignore-submodules --refresh
-then
-	die "Up-to-date check failed"
-fi
-
-if ! git diff-files --quiet --ignore-submodules --
-then
-	die "Working directory has unstaged changes"
-fi
-
-# This is a rough translation of:
-#
-#   head_has_history() ? "HEAD" : EMPTY_TREE_SHA1_HEX
-if git cat-file -e HEAD 2>/dev/null
-then
-	head=HEAD
-else
-	head=$(git hash-object -t tree --stdin </dev/null)
-fi
-
-if ! git diff-index --quiet --cached --ignore-submodules $head --
-then
-	die "Working directory has staged changes"
-fi
-
-if ! git read-tree -u -m "$commit"
-then
-	die "Could not update working tree to new HEAD"
-fi
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\sendemail-validate.sample ---
-#!/bin/sh
-
-# An example hook script to validate a patch (and/or patch series) before
-# sending it via email.
-#
-# The hook should exit with non-zero status after issuing an appropriate
-# message if it wants to prevent the email(s) from being sent.
-#
-# To enable this hook, rename this file to "sendemail-validate".
-#
-# By default, it will only check that the patch(es) can be applied on top of
-# the default upstream branch without conflicts in a secondary worktree. After
-# validation (successful or not) of the last patch of a series, the worktree
-# will be deleted.
-#
-# The following config variables can be set to change the default remote and
-# remote ref that are used to apply the patches against:
-#
-#   sendemail.validateRemote (default: origin)
-#   sendemail.validateRemoteRef (default: HEAD)
-#
-# Replace the TODO placeholders with appropriate checks according to your
-# needs.
-
-validate_cover_letter () {
-	file="$1"
-	# TODO: Replace with appropriate checks (e.g. spell checking).
-	true
-}
-
-validate_patch () {
-	file="$1"
-	# Ensure that the patch applies without conflicts.
-	git am -3 "$file" || return
-	# TODO: Replace with appropriate checks for this patch
-	# (e.g. checkpatch.pl).
-	true
-}
-
-validate_series () {
-	# TODO: Replace with appropriate checks for the whole series
-	# (e.g. quick build, coding style checks, etc.).
-	true
-}
-
-# main -------------------------------------------------------------------------
-
-if test "$GIT_SENDEMAIL_FILE_COUNTER" = 1
-then
-	remote=$(git config --default origin --get sendemail.validateRemote) &&
-	ref=$(git config --default HEAD --get sendemail.validateRemoteRef) &&
-	worktree=$(mktemp --tmpdir -d sendemail-validate.XXXXXXX) &&
-	git worktree add -fd --checkout "$worktree" "refs/remotes/$remote/$ref" &&
-	git config --replace-all sendemail.validateWorktree "$worktree"
-else
-	worktree=$(git config --get sendemail.validateWorktree)
-fi || {
-	echo "sendemail-validate: error: failed to prepare worktree" >&2
-	exit 1
-}
-
-unset GIT_DIR GIT_WORK_TREE
-cd "$worktree" &&
-
-if grep -q "^diff --git " "$1"
-then
-	validate_patch "$1"
-else
-	validate_cover_letter "$1"
-fi &&
-
-if test "$GIT_SENDEMAIL_FILE_COUNTER" = "$GIT_SENDEMAIL_FILE_TOTAL"
-then
-	git config --unset-all sendemail.validateWorktree &&
-	trap 'git worktree remove -ff "$worktree"' EXIT &&
-	validate_series
-fi
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\hooks\update.sample ---
-#!/bin/sh
-#
-# An example hook script to block unannotated tags from entering.
-# Called by "git receive-pack" with arguments: refname sha1-old sha1-new
-#
-# To enable this hook, rename this file to "update".
-#
-# Config
-# ------
-# hooks.allowunannotated
-#   This boolean sets whether unannotated tags will be allowed into the
-#   repository.  By default they won't be.
-# hooks.allowdeletetag
-#   This boolean sets whether deleting tags will be allowed in the
-#   repository.  By default they won't be.
-# hooks.allowmodifytag
-#   This boolean sets whether a tag may be modified after creation. By default
-#   it won't be.
-# hooks.allowdeletebranch
-#   This boolean sets whether deleting branches will be allowed in the
-#   repository.  By default they won't be.
-# hooks.denycreatebranch
-#   This boolean sets whether remotely creating branches will be denied
-#   in the repository.  By default this is allowed.
-#
-
-# --- Command line
-refname="$1"
-oldrev="$2"
-newrev="$3"
-
-# --- Safety check
-if [ -z "$GIT_DIR" ]; then
-	echo "Don't run this script from the command line." >&2
-	echo " (if you want, you could supply GIT_DIR then run" >&2
-	echo "  $0 <ref> <oldrev> <newrev>)" >&2
-	exit 1
-fi
-
-if [ -z "$refname" -o -z "$oldrev" -o -z "$newrev" ]; then
-	echo "usage: $0 <ref> <oldrev> <newrev>" >&2
-	exit 1
-fi
-
-# --- Config
-allowunannotated=$(git config --type=bool hooks.allowunannotated)
-allowdeletebranch=$(git config --type=bool hooks.allowdeletebranch)
-denycreatebranch=$(git config --type=bool hooks.denycreatebranch)
-allowdeletetag=$(git config --type=bool hooks.allowdeletetag)
-allowmodifytag=$(git config --type=bool hooks.allowmodifytag)
-
-# check for no description
-projectdesc=$(sed -e '1q' "$GIT_DIR/description")
-case "$projectdesc" in
-"Unnamed repository"* | "")
-	echo "*** Project description file hasn't been set" >&2
-	exit 1
-	;;
-esac
-
-# --- Check types
-# if $newrev is 0000...0000, it's a commit to delete a ref.
-zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
-if [ "$newrev" = "$zero" ]; then
-	newrev_type=delete
-else
-	newrev_type=$(git cat-file -t $newrev)
-fi
-
-case "$refname","$newrev_type" in
-	refs/tags/*,commit)
-		# un-annotated tag
-		short_refname=${refname##refs/tags/}
-		if [ "$allowunannotated" != "true" ]; then
-			echo "*** The un-annotated tag, $short_refname, is not allowed in this repository" >&2
-			echo "*** Use 'git tag [ -a | -s ]' for tags you want to propagate." >&2
-			exit 1
-		fi
-		;;
-	refs/tags/*,delete)
-		# delete tag
-		if [ "$allowdeletetag" != "true" ]; then
-			echo "*** Deleting a tag is not allowed in this repository" >&2
-			exit 1
-		fi
-		;;
-	refs/tags/*,tag)
-		# annotated tag
-		if [ "$allowmodifytag" != "true" ] && git rev-parse $refname > /dev/null 2>&1
-		then
-			echo "*** Tag '$refname' already exists." >&2
-			echo "*** Modifying a tag is not allowed in this repository." >&2
-			exit 1
-		fi
-		;;
-	refs/heads/*,commit)
-		# branch
-		if [ "$oldrev" = "$zero" -a "$denycreatebranch" = "true" ]; then
-			echo "*** Creating a branch is not allowed in this repository" >&2
-			exit 1
-		fi
-		;;
-	refs/heads/*,delete)
-		# delete branch
-		if [ "$allowdeletebranch" != "true" ]; then
-			echo "*** Deleting a branch is not allowed in this repository" >&2
-			exit 1
-		fi
-		;;
-	refs/remotes/*,commit)
-		# tracking branch
-		;;
-	refs/remotes/*,delete)
-		# delete tracking branch
-		if [ "$allowdeletebranch" != "true" ]; then
-			echo "*** Deleting a tracking branch is not allowed in this repository" >&2
-			exit 1
-		fi
-		;;
-	*)
-		# Anything else (is there anything else?)
-		echo "*** Update hook: unknown type of update to ref $refname of type $newrev_type" >&2
-		exit 1
-		;;
-esac
-
-# --- Finished
-exit 0
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.git\info\exclude ---
-# git ls-files --others --exclude-from=.git/info/exclude
-# Lines that start with '#' are comments.
-# For a project mostly in C, the following would be a good set of
-# exclude patterns (uncomment them if you want to use them):
-# *.[oa]
-# *~
-
-
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\crc_decode.m ---
 function crc_decode(pipeIn, pipeOut)
-% CRC_DECODE - ITU-T CRC-32 decoder (continuous hardware-style operation)
+% CRC_DECODE - ITU-T CRC-32 decoder (SOCKET-ONLY VERSION)
 %
 % @BlockConfig
 % name: CrcDecode
@@ -1126,17 +189,27 @@ function crc_decode(pipeIn, pipeOut)
 % outputSize: 1501
 % LTR: false
 % startWithAll: true
+% socketHost: localhost
+% socketPort: 9001
 % polynomial: 0x04C11DB7
 % description: CRC-32 decoder with error detection - continuous operation
 % @EndBlockConfig
 
     config = parse_block_config();
-    send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
+    
+    % SOCKET CONNECTION (REQUIRED)
+    socketObj = matlab_socket_client(config.socketHost, config.socketPort, 10);
+    
+    if isempty(socketObj)
+        error('Failed to connect to socket server. Make sure Electron is running!');
+    end
+    
+    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
     
     try
         crcTable = build_crc32_table();
         
-        send_protocol_message('BLOCK_READY', config.blockId, config.name, '');
+        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
         
         frameCount = 0;
         errorCount = 0;
@@ -1186,7 +259,7 @@ function crc_decode(pipeIn, pipeOut)
             metrics = struct();
             metrics.frames = frameCount;
             metrics.gbps = instantGbps;
-            send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
             
             if mod(frameCount, 1000) == 0
                 errorRate = 100.0 * errorCount / frameCount;
@@ -1195,7 +268,8 @@ function crc_decode(pipeIn, pipeOut)
         end
         
     catch ME
-        send_protocol_message('BLOCK_ERROR', config.blockId, config.name, ME.message);
+        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
+        clear socketObj;
         rethrow(ME);
     end
 end
@@ -1274,7 +348,7 @@ end
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\crc_encode.m ---
 function crc_encode(pipeIn, pipeOut)
-% CRC_ENCODE - ITU-T CRC-32 encoder (continuous hardware-style operation)
+% CRC_ENCODE - ITU-T CRC-32 encoder (SOCKET-ONLY VERSION)
 %
 % @BlockConfig
 % name: CrcEncode
@@ -1284,18 +358,28 @@ function crc_encode(pipeIn, pipeOut)
 % outputSize: 1504
 % LTR: true
 % startWithAll: true
+% socketHost: localhost
+% socketPort: 9001
 % polynomial: 0x04C11DB7
 % description: CRC-32 encoder (ITU-T V.42) - continuous operation
 % @EndBlockConfig
 
     config = parse_block_config();
-    send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
+    
+    % SOCKET CONNECTION (REQUIRED)
+    socketObj = matlab_socket_client(config.socketHost, config.socketPort, 10);
+    
+    if isempty(socketObj)
+        error('Failed to connect to socket server. Make sure Electron is running!');
+    end
+    
+    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
     
     try
         % Build CRC-32 lookup table
         crcTable = build_crc32_table();
         
-        send_protocol_message('BLOCK_READY', config.blockId, config.name, '');
+        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
         
         frameCount = 0;
         totalBytes = 0;
@@ -1338,11 +422,12 @@ function crc_encode(pipeIn, pipeOut)
             metrics = struct();
             metrics.frames = frameCount;
             metrics.gbps = instantGbps;
-            send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
         end
         
     catch ME
-        send_protocol_message('BLOCK_ERROR', config.blockId, config.name, ME.message);
+        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
+        clear socketObj;
         rethrow(ME);
     end
 end
@@ -1427,7 +512,7 @@ end
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\file_sink.m ---
 function file_sink(pipeIn)
-% FILE_SINK - Continuous file reception with batch reporting
+% FILE_SINK - Continuous file reception (SOCKET-ONLY VERSION)
 %
 % @BlockConfig
 % name: FileSink
@@ -1437,20 +522,30 @@ function file_sink(pipeIn)
 % outputSize: 0
 % LTR: false
 % startWithAll: true
+% socketHost: localhost
+% socketPort: 9001
 % outputDirectory: C:\Users\amrga\Downloads\final\pipeline-editor\Output_Files
 % reportFile: error_report.txt
 % description: File sink - receives multiple batches, reports after each batch
 % @EndBlockConfig
 
     config = parse_block_config();
-    send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
+    
+    % SOCKET CONNECTION (REQUIRED)
+    socketObj = matlab_socket_client(config.socketHost, config.socketPort, 10);
+    
+    if isempty(socketObj)
+        error('Failed to connect to socket server. Make sure Electron is running!');
+    end
+    
+    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
     
     try
         if ~exist(config.outputDirectory, 'dir')
             mkdir(config.outputDirectory);
         end
         
-        send_protocol_message('BLOCK_READY', config.blockId, config.name, '');
+        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
         
         packetCount = 0;
         totalBytes = 0;
@@ -1469,26 +564,23 @@ function file_sink(pipeIn)
             try
                 packet = pipeline_mex('read', pipeIn, config.inputSize);
             catch ME
-                % Pipeline closed - save any incomplete file and generate final report
+                % Pipeline closed
                 fprintf('\n========================================\n');
                 fprintf('PIPELINE CLOSED\n');
                 fprintf('========================================\n');
                 
-                if currentFile.active
+                if currentFile.active && ~isempty(currentFile.data)
                     fprintf('Saving incomplete file: %s\n', currentFile.name);
-                    if ~isempty(currentFile.data)
-                        save_file(currentFile, config.outputDirectory);
-                        fileStats{end+1} = struct('name', currentFile.name, ...
-                                                  'size', length(currentFile.data), ...
-                                                  'expected', currentFile.size, ...
-                                                  'errors', currentFile.errors, ...
-                                                  'packets', currentFile.packets, ...
-                                                  'complete', false);
-                        totalErrors = totalErrors + currentFile.errors;
-                    end
+                    save_file(currentFile, config.outputDirectory);
+                    fileStats{end+1} = struct('name', currentFile.name, ...
+                                              'size', length(currentFile.data), ...
+                                              'expected', currentFile.size, ...
+                                              'errors', currentFile.errors, ...
+                                              'packets', currentFile.packets, ...
+                                              'complete', false);
+                    totalErrors = totalErrors + currentFile.errors;
                 end
                 
-                % Generate final error report
                 fprintf('Generating final error report...\n');
                 generate_error_report(fileStats, config.outputDirectory, config.reportFile);
                 
@@ -1501,6 +593,8 @@ function file_sink(pipeIn)
                 fprintf('Total data:           %.2f MB\n', totalBytes/1e6);
                 fprintf('========================================\n');
                 
+                send_socket_message(socketObj, 'BLOCK_STOPPED', config.blockId, config.name, '');
+                clear socketObj;
                 return;
             end
             
@@ -1510,18 +604,14 @@ function file_sink(pipeIn)
             packetCount = packetCount + 1;
             totalBytes = totalBytes + 1500;
             
-            % Convert int8 back to uint8 properly (add 128)
             dataBytes = uint8(int32(data) + 128);
             
-            % Check for START marker
             isStart = (dataBytes(1) == 0x53 && dataBytes(2) == 0x54 && ...
                       dataBytes(3) == 0x41 && dataBytes(4) == 0x52);
             
-            % Check for header
             isHeader = (dataBytes(1) == 0x46 && dataBytes(2) == 0x49 && ...
                        dataBytes(3) == 0x4C && dataBytes(4) == 0x45);
             
-            % Check for END marker
             isEnd = (dataBytes(1) == 0x45 && dataBytes(2) == 0x4E && ...
                     dataBytes(3) == 0x44 && dataBytes(4) == 0x00);
             
@@ -1533,9 +623,7 @@ function file_sink(pipeIn)
             if isEnd
                 fprintf('--- END marker received ---\n');
                 
-                % Save current file if active
                 if currentFile.active
-                    % Check if file was complete
                     if length(currentFile.data) >= currentFile.size
                         currentFile.data = currentFile.data(1:currentFile.size);
                         save_file(currentFile, config.outputDirectory);
@@ -1548,7 +636,6 @@ function file_sink(pipeIn)
                         totalErrors = totalErrors + currentFile.errors;
                         fprintf('  File complete and saved: %s\n', currentFile.name);
                     else
-                        % Incomplete file
                         save_file(currentFile, config.outputDirectory);
                         fileStats{end+1} = struct('name', currentFile.name, ...
                                                   'size', length(currentFile.data), ...
@@ -1561,13 +648,10 @@ function file_sink(pipeIn)
                                 currentFile.name, length(currentFile.data), currentFile.size);
                     end
                     
-                    % Generate updated error report
                     generate_error_report(fileStats, config.outputDirectory, config.reportFile);
-                    
                     currentFile.active = false;
                 end
                 
-                % Update metrics after END marker
                 currentTime = toc(startTime);
                 elapsed = currentTime - lastTime;
                 if elapsed > 0
@@ -1582,16 +666,14 @@ function file_sink(pipeIn)
                 metrics.frames = packetCount;
                 metrics.gbps = instantGbps;
                 metrics.totalGB = totalBytes / 1e9;
-                send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+                send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
                 
                 fprintf('Total files received: %d, Total packets: %d\n\n', ...
                         length(fileStats), packetCount);
-                
                 continue;
             end
             
             if isHeader
-                % Save previous file
                 if currentFile.active
                     save_file(currentFile, config.outputDirectory);
                     fileStats{end+1} = struct('name', currentFile.name, ...
@@ -1603,7 +685,6 @@ function file_sink(pipeIn)
                     totalErrors = totalErrors + currentFile.errors;
                 end
                 
-                % Parse header
                 nameLen = bitor(uint16(dataBytes(5)), bitshift(uint16(dataBytes(6)), 8));
                 fileName = char(dataBytes(7:6+nameLen)');
                 
@@ -1612,7 +693,6 @@ function file_sink(pipeIn)
                     fileSize = bitor(fileSize, bitshift(uint64(dataBytes(7+nameLen+i)), 8*i));
                 end
                 
-                % Start new file
                 currentFile.active = true;
                 currentFile.name = fileName;
                 currentFile.size = double(fileSize);
@@ -1626,7 +706,6 @@ function file_sink(pipeIn)
                 currentFile.packets = currentFile.packets + 1;
                 
             else
-                % Data packet
                 if currentFile.active
                     currentFile.data = [currentFile.data; data];
                     currentFile.packets = currentFile.packets + 1;
@@ -1637,7 +716,6 @@ function file_sink(pipeIn)
                 end
             end
             
-            % Metrics
             currentTime = toc(startTime);
             elapsed = currentTime - lastTime;
             if elapsed > 0
@@ -1652,24 +730,23 @@ function file_sink(pipeIn)
             metrics.frames = packetCount;
             metrics.gbps = instantGbps;
             metrics.totalGB = totalBytes / 1e9;
-            send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
         end
         
     catch ME
-        send_protocol_message('BLOCK_ERROR', config.blockId, config.name, ME.message);
+        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
+        clear socketObj;
         rethrow(ME);
     end
 end
 
 function save_file(fileInfo, outputDir)
     filePath = fullfile(outputDir, fileInfo.name);
-    
     fid = fopen(filePath, 'wb');
     if fid == -1
         fprintf('ERROR: Cannot create: %s\n', filePath);
         return;
     end
-    % Convert int8 back to uint8 by adding 128
     dataBytes = uint8(int32(fileInfo.data) + 128);
     fwrite(fid, dataBytes);
     fclose(fid);
@@ -1784,7 +861,7 @@ end
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\file_source.m ---
 function file_source(pipeOut)
-% FILE_SOURCE - Single-pass file transmission
+% FILE_SOURCE - Single-pass file transmission (SOCKET-ONLY VERSION)
 %
 % @BlockConfig
 % name: FileSource
@@ -1794,6 +871,8 @@ function file_source(pipeOut)
 % outputSize: 1500
 % LTR: true
 % startWithAll: false
+% socketHost: localhost
+% socketPort: 9001
 % sourceDirectory: C:\Users\amrga\Downloads\final\pipeline-editor\Test_Files
 % loopMode: false
 % description: File source block - sends all files once then exits
@@ -1802,17 +881,33 @@ function file_source(pipeOut)
     config = parse_block_config();
     PACKET_SIZE = 1500;
     
-    send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
+    fprintf('\n========================================\n');
+    fprintf('FILE SOURCE - Socket Mode Only\n');
+    fprintf('========================================\n');
+    fprintf('Connecting to socket %s:%d...\n', config.socketHost, config.socketPort);
+    
+    % SOCKET CONNECTION (REQUIRED)
+    socketObj = matlab_socket_client(config.socketHost, config.socketPort, 10);
+    
+    if isempty(socketObj)
+        error('Failed to connect to socket server. Make sure Electron is running!');
+    end
+    
+    fprintf('✓ Socket connected\n');
+    fprintf('========================================\n\n');
+    
+    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
 
     try
         if ~exist(config.sourceDirectory, 'dir')
             mkdir(config.sourceDirectory);
             fprintf('Created source directory. Add files and restart.\n');
-            send_protocol_message('BLOCK_ERROR', config.blockId, config.name, 'No source directory');
+            send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, 'No source directory');
+            clear socketObj;
             return;
         end
         
-        send_protocol_message('BLOCK_READY', config.blockId, config.name, '');
+        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
         
         packetCount = 0;
         totalBytes = 0;
@@ -1826,7 +921,8 @@ function file_source(pipeOut)
         
         if isempty(fileList)
             fprintf('No files found in source directory.\n');
-            send_protocol_message('BLOCK_ERROR', config.blockId, config.name, 'No files to send');
+            send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, 'No files to send');
+            clear socketObj;
             return;
         end
         
@@ -1891,7 +987,7 @@ function file_source(pipeOut)
                 metrics.frames = packetCount;
                 metrics.gbps = instantGbps;
                 metrics.totalGB = totalBytes / 1e9;
-                send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+                send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
             end
             
             % Send END marker after each file
@@ -1905,7 +1001,7 @@ function file_source(pipeOut)
             metrics.frames = packetCount;
             metrics.gbps = instantGbps;
             metrics.totalGB = totalBytes / 1e9;
-            send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
             
             fprintf('  Sent: %d packets (%.2f KB)\n', numPackets, actualFileSize/1024);
         end
@@ -1918,13 +1014,25 @@ function file_source(pipeOut)
         fprintf('Total data:       %.2f MB\n', totalBytes/1e6);
         fprintf('========================================\n');
         
+        % Final metrics
+        finalMetrics = struct();
+        finalMetrics.frames = packetCount;
+        finalMetrics.gbps = 0;
+        finalMetrics.totalGB = totalBytes / 1e9;
+        send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, finalMetrics);
+        
         % Wait 5 seconds before closing
         fprintf('\nWaiting 5 seconds before exit...\n');
         pause(5);
         fprintf('Exiting.\n');
         
+        % Cleanup socket
+        send_socket_message(socketObj, 'BLOCK_STOPPED', config.blockId, config.name, '');
+        clear socketObj;
+        
     catch ME
-        send_protocol_message('BLOCK_ERROR', config.blockId, config.name, ME.message);
+        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
+        clear socketObj;
         rethrow(ME);
     end
 end
@@ -1950,14 +1058,12 @@ end
 function startPacket = create_start_marker()
     PACKET_SIZE = 1500;
     startPacket = zeros(PACKET_SIZE, 1, 'int8');
-    % START marker: 0x53 0x54 0x41 0x52 ("STAR")
     startPacket(1:4) = int8(int32([0x53, 0x54, 0x41, 0x52]) - 128);
 end
 
 function endPacket = create_end_marker()
     PACKET_SIZE = 1500;
     endPacket = zeros(PACKET_SIZE, 1, 'int8');
-    % END marker: 0x45 0x4E 0x44 0x00 ("END\0")
     endPacket(1:4) = int8(int32([0x45, 0x4E, 0x44, 0x00]) - 128);
 end
 
@@ -2014,38 +1120,124 @@ function config = parse_block_config()
     end
 end
 
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\send_protocol_message.m ---
-function send_protocol_message(msgType, blockId, blockName, data)
-% SEND_PROTOCOL_MESSAGE - Send standardized protocol message
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\matlab_socket_client.m ---
+function socketObj = matlab_socket_client(host, port, maxRetries)
+% MATLAB_SOCKET_CLIENT - Connect to Electron via TCP socket
+%
+% Usage:
+%   socketObj = matlab_socket_client('localhost', 9001)
+%   socketObj = matlab_socket_client('localhost', 9001, 10)
+%
+% Inputs:
+%   host       - Socket host (default: 'localhost')
+%   port       - Socket port (default: 9001)
+%   maxRetries - Max connection attempts (default: 10)
+%
+% Output:
+%   socketObj  - TCP client object, or [] if connection failed
+
+    if nargin < 1, host = 'localhost'; end
+    if nargin < 2, port = 9001; end
+    if nargin < 3, maxRetries = 10; end
+    
+    socketObj = [];
+    
+    for attempt = 1:maxRetries
+        try
+            % Create TCP client
+            socketObj = tcpclient(host, port);
+            socketObj.Timeout = 5;
+            
+            fprintf('[SOCKET] ✓ Connected to %s:%d (attempt %d/%d)\n', ...
+                    host, port, attempt, maxRetries);
+            return;
+            
+        catch ME
+            if attempt < maxRetries
+                fprintf('[SOCKET] Connection failed (attempt %d/%d), retrying in 0.5s...\n', ...
+                        attempt, maxRetries);
+                pause(0.5);
+            else
+                fprintf('[SOCKET] ✗ Failed to connect after %d attempts: %s\n', ...
+                        maxRetries, ME.message);
+                socketObj = [];
+                return;
+            end
+        end
+    end
+end
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\send_socket_message.m ---
+function send_socket_message(socketObj, msgType, blockId, blockName, data)
+% SEND_SOCKET_MESSAGE - Send JSON message via socket (SOCKET-ONLY VERSION)
+%
+% Usage:
+%   send_socket_message(socket, 'BLOCK_INIT', 123, 'FileSource', '')
+%   send_socket_message(socket, 'BLOCK_METRICS', 123, 'FileSource', metrics)
+%
+% Inputs:
+%   socketObj - TCP client object from matlab_socket_client()
+%   msgType   - Message type: BLOCK_INIT, BLOCK_READY, BLOCK_METRICS, etc.
+%   blockId   - Block ID number
+%   blockName - Block name string
+%   data      - Data (struct for BLOCK_METRICS, string for errors)
+
+    % Check if socket is valid
+    if isempty(socketObj) || ~isvalid(socketObj)
+        error('Socket is not connected. Cannot send message.');
+    end
+    
     timestamp = datestr(now, 'HH:MM:SS.FFF');
+    
+    % Build message structure
+    msg = struct();
+    msg.protocol = 'MATLAB_V1';
+    msg.timestamp = timestamp;
+    msg.blockId = blockId;
+    msg.blockName = blockName;
+    msg.type = msgType;
+    
+    % Add data based on type
     switch msgType
         case 'BLOCK_INIT'
-            dataStr = blockName;
+            msg.data = struct('status', 'initializing');
+            
         case 'BLOCK_READY'
-            dataStr = blockName;
+            msg.data = struct('status', 'ready');
+            
         case 'BLOCK_ERROR'
-            dataStr = data;
-        case 'BLOCK_METRICS'
-            if isfield(data, 'totalFrames') && isfield(data, 'totalGB')
-                dataStr = sprintf('%d|%d|%.0f|%.2f', data.frames, data.totalFrames, data.gbps * 1e9, data.totalGB);
-            elseif isfield(data, 'totalFrames')
-                dataStr = sprintf('%d|%d|%.0f', data.frames, data.totalFrames, data.gbps * 1e9);
-            elseif isfield(data, 'totalGB')
-                dataStr = sprintf('%d|%.0f|%.2f', data.frames, data.gbps * 1e9, data.totalGB);
+            if isstruct(data)
+                msg.data = data;
             else
-                dataStr = sprintf('%d|%.0f', data.frames, data.gbps * 1e9);
+                msg.data = struct('error', char(data));
             end
+            
+        case 'BLOCK_METRICS'
+            % Data should already be a struct with fields:
+            % frames, gbps, totalGB (optional), totalFrames (optional)
+            msg.data = data;
+            
         case 'BLOCK_GRAPH'
-            dataStr = sprintf('%.2f,%.2f', data.x, data.y);
+            % Data should be struct with x, y fields
+            msg.data = data;
+            
         case 'BLOCK_STOPPING'
-            dataStr = blockName;
+            msg.data = struct('status', 'stopping');
+            
         case 'BLOCK_STOPPED'
-            dataStr = blockName;
+            msg.data = struct('status', 'stopped');
+            
         otherwise
-            error('Unknown message type: %s', msgType);
+            msg.data = struct('raw', char(data));
     end
-    msg = sprintf('[PROTOCOL_V1][%s][%d][%s][%s]', timestamp, blockId, msgType, dataStr);
-    fprintf('%s\n', msg);
+    
+    % Convert to JSON and send
+    try
+        jsonStr = jsonencode(msg);
+        write(socketObj, uint8([jsonStr newline]));
+    catch ME
+        error('Failed to send %s message: %s', msgType, ME.message);
+    end
 end
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp\pipeline_mex.cpp ---
@@ -2224,8 +1416,11 @@ const PipelineEditor = () => {
   const [clipboard, setClipboard] = useState(null);
   const [isStartingServer, setIsStartingServer] = useState(false);
   const [graphWindows, setGraphWindows] = useState({});
+  const [socketConnected, setSocketConnected] = useState(false);
   
   const canvasRef = useRef(null);
+  const serverMessageListenerRef = useRef(null);
+  const socketStatusListenerRef = useRef(null);
 
   const addLog = (type, message) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -2253,7 +1448,8 @@ const PipelineEditor = () => {
     setBlockMetrics,
     graphData,
     setGraphData,
-    blockStatus
+    blockStatus,
+    setBlockStatus
   } = useProcessManager(addLog);
 
   const {
@@ -2359,6 +1555,7 @@ const PipelineEditor = () => {
     canvasRef
   });
 
+  // Get project directory on mount
   useEffect(() => {
     const getDir = async () => {
       const dir = await window.electronAPI.getAppPath();
@@ -2367,6 +1564,186 @@ const PipelineEditor = () => {
     getDir();
   }, []);
 
+  // Listen to server socket messages
+  useEffect(() => {
+    if (serverMessageListenerRef.current) {
+      serverMessageListenerRef.current();
+    }
+    
+    serverMessageListenerRef.current = window.electronAPI.onServerMessage((message) => {
+      console.log('Server message received:', message);
+      
+      const { type, message: msg, data, timestamp } = message;
+      
+      switch (type) {
+        case 'CONNECTED':
+          addLog('success', '🔌 Socket connected to server');
+          setSocketConnected(true);
+          break;
+          
+        case 'STATUS':
+          addLog('info', `[Server] ${msg}`);
+          break;
+          
+        case 'PIPE_CREATED':
+          addLog('success', `[Server] ${msg}`);
+          break;
+          
+        case 'READY':
+          addLog('success', `[Server] ${msg}`);
+          setServerRunning(true);
+          break;
+          
+        case 'ERROR':
+          addLog('error', `[Server] ${msg}`);
+          break;
+          
+        case 'HEARTBEAT':
+          // Don't log heartbeats to keep log clean
+          console.log('[Server Heartbeat]');
+          break;
+          
+        case 'SHUTDOWN':
+          addLog('warning', `[Server] ${msg}`);
+          setServerRunning(false);
+          setSocketConnected(false);
+          break;
+          
+        default:
+          addLog('info', `[Server] ${type}: ${msg}`);
+      }
+    });
+    
+    return () => {
+      if (serverMessageListenerRef.current) {
+        serverMessageListenerRef.current();
+      }
+    };
+  }, []);
+
+  // Listen to socket connection status
+  useEffect(() => {
+    if (socketStatusListenerRef.current) {
+      socketStatusListenerRef.current();
+    }
+    
+    socketStatusListenerRef.current = window.electronAPI.onServerSocketStatus((status) => {
+      console.log('Socket status:', status);
+      
+      if (status.connected) {
+        setSocketConnected(true);
+        addLog('success', `Socket connected on port ${status.port || 9000}`);
+      } else {
+        setSocketConnected(false);
+        if (status.error) {
+          addLog('error', `Socket error: ${status.error}`);
+        } else {
+          addLog('warning', 'Socket disconnected');
+        }
+        setServerRunning(false);
+      }
+    });
+    
+    return () => {
+      if (socketStatusListenerRef.current) {
+        socketStatusListenerRef.current();
+      }
+    };
+  }, []);
+
+  // Listen to MATLAB block messages via socket
+  useEffect(() => {
+    const listener = window.electronAPI.onMatlabMessage((message) => {
+      console.log('MATLAB socket message:', message);
+      
+      const { protocol, blockId, blockName, type, data, timestamp } = message;
+      
+      switch (type) {
+        case 'BLOCK_INIT':
+          addLog('info', `[${blockName}] Initializing...`);
+          setBlockStatus(prev => ({ ...prev, [blockId]: 'initializing' }));
+          break;
+          
+        case 'BLOCK_READY':
+          addLog('success', `[${blockName}] Ready`);
+          setBlockStatus(prev => ({ ...prev, [blockId]: 'ready' }));
+          // Mark as running in blockProcesses
+          setBlockProcesses(prev => {
+            const blockEntry = Object.entries(prev).find(([key, proc]) => 
+              proc.name === blockName
+            );
+            if (blockEntry) {
+              const [key, proc] = blockEntry;
+              return {
+                ...prev,
+                [key]: { ...proc, status: 'running' }
+              };
+            }
+            return prev;
+          });
+          break;
+          
+        case 'BLOCK_METRICS':
+          setBlockMetrics(prev => ({
+            ...prev,
+            [blockId]: {
+              frames: data.frames || 0,
+              gbps: data.gbps || 0,
+              totalGB: data.totalGB,
+              totalFrames: data.totalFrames
+            }
+          }));
+          break;
+          
+        case 'BLOCK_GRAPH':
+          const graphPoint = { x: data.x, y: data.y };
+          setGraphData(prev => {
+            const existing = prev[blockId] || { xData: [], yData: [] };
+            const maxPoints = 500;
+            
+            const newXData = [...existing.xData, graphPoint.x];
+            const newYData = [...existing.yData, graphPoint.y];
+            
+            if (newXData.length > maxPoints) {
+              newXData.shift();
+              newYData.shift();
+            }
+            
+            return {
+              ...prev,
+              [blockId]: {
+                xData: newXData,
+                yData: newYData
+              }
+            };
+          });
+          break;
+          
+        case 'BLOCK_ERROR':
+          addLog('error', `[${blockName}] ${data.error || data.status || 'Error'}`);
+          setBlockStatus(prev => ({ ...prev, [blockId]: 'error' }));
+          break;
+          
+        case 'BLOCK_STOPPING':
+          addLog('info', `[${blockName}] Stopping...`);
+          setBlockStatus(prev => ({ ...prev, [blockId]: 'stopping' }));
+          break;
+          
+        case 'BLOCK_STOPPED':
+          addLog('info', `[${blockName}] Stopped`);
+          setBlockStatus(prev => {
+            const newStatus = { ...prev };
+            delete newStatus[blockId];
+            return newStatus;
+          });
+          break;
+      }
+    });
+    
+    return () => listener();
+  }, []);
+
+  // Update graph windows when graph data changes
   useEffect(() => {
     Object.entries(graphData).forEach(([blockId, data]) => {
       if (!graphWindows[blockId]) {
@@ -2463,10 +1840,8 @@ const PipelineEditor = () => {
     const block = selectedBlocks[0];
     
     try {
-      // Re-parse the block to get updated configuration
       const reparsedData = parseMatlabBlock(updatedCode, block.fileName);
       
-      // Calculate new port positions based on updated inputs/outputs
       const newPortPositions = calculatePortPositions(
         reparsedData.inputs, 
         reparsedData.outputs, 
@@ -2476,7 +1851,6 @@ const PipelineEditor = () => {
         GRID_SIZE
       );
       
-      // Create updated block with ALL new properties from parsed config
       const updatedBlock = { 
         ...block, 
         code: updatedCode,
@@ -2497,7 +1871,6 @@ const PipelineEditor = () => {
         description: reparsedData.description
       };
       
-      // Find connections that need to be removed due to port changes
       const removedConnections = connections.filter(conn => {
         if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) {
           return true;
@@ -2508,7 +1881,6 @@ const PipelineEditor = () => {
         return false;
       });
       
-      // Update blocks array
       const newBlocks = blocks.map(b => b.id === block.id ? updatedBlock : b);
       const newConnections = connections.filter(conn => !removedConnections.includes(conn));
       
@@ -2555,7 +1927,6 @@ const PipelineEditor = () => {
     handleCanvasClick(e);
   };
 
-
   useKeyboardShortcuts({
     onUndo: handleUndo,
     onRedo: handleRedo,
@@ -2580,6 +1951,7 @@ const PipelineEditor = () => {
         blockProcesses={blockProcesses}
         blockStatus={blockStatus}
         executionLog={executionLog}
+        socketConnected={socketConnected}
         onEditCode={handleEditBlockCode}
         onDelete={handleDelete}
         onBlockColorChange={(block, color) => {
@@ -2615,6 +1987,7 @@ const PipelineEditor = () => {
           serverRunning={serverRunning}
           isStartingServer={isStartingServer}
           hasProcesses={Object.keys(blockProcesses).length > 0}
+          socketConnected={socketConnected}
         />
         
         <div className="flex-1 overflow-auto bg-gray-50">
@@ -2688,7 +2061,6 @@ const PipelineEditor = () => {
 
 export default PipelineEditor;
 
-
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\index.css ---
 @tailwind base;
 @tailwind components;
@@ -2717,9 +2089,16 @@ import fs from 'fs/promises';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import started from 'electron-squirrel-startup';
+import net from 'net'; // Added for socket communication
 
 const execAsync = promisify(exec);
 const runningProcesses = new Map();
+let serverSocket = null; // Socket connection to C++ server
+let serverSocketConnected = false;
+
+// MATLAB socket server
+let matlabSocketServer = null;
+const matlabClients = new Map();
 
 if (started) {
   app.quit();
@@ -2758,6 +2137,10 @@ const createWindow = () => {
   mainWindow.on('close', async (e) => {
     e.preventDefault();
     await cleanupAllProcesses();
+    if (serverSocket) {
+      serverSocket.destroy(); // This will trigger server shutdown
+      serverSocket = null;
+    }
     mainWindow.destroy();
   });
 };
@@ -2801,6 +2184,93 @@ const cleanupAllProcesses = async () => {
   
   runningProcesses.clear();
   console.log('All processes cleaned up');
+};
+
+// Connect to C++ server via socket
+const connectToServer = (port = 9000, retries = 30) => {
+  return new Promise((resolve, reject) => {
+    let attemptCount = 0;
+    
+    const attemptConnection = () => {
+      attemptCount++;
+      console.log(`Attempting to connect to server on port ${port} (attempt ${attemptCount}/${retries})...`);
+      
+      const client = new net.Socket();
+      
+      // Set timeout for connection attempt
+      client.setTimeout(1000);
+      
+      client.connect(port, 'localhost', () => {
+        console.log('Connected to C++ server via socket');
+        serverSocketConnected = true;
+        
+        // Send connection confirmation to UI
+        mainWindow.webContents.send('server-socket-status', {
+          connected: true,
+          port: port
+        });
+        
+        // Clear timeout
+        client.setTimeout(0);
+        
+        resolve(client);
+      });
+      
+      client.on('data', (data) => {
+        // Parse JSON messages from server
+        const messages = data.toString().split('\n').filter(msg => msg.trim());
+        
+        messages.forEach(msg => {
+          try {
+            const parsed = JSON.parse(msg);
+            console.log('Received from server:', parsed);
+            
+            // Forward to UI
+            mainWindow.webContents.send('server-message', parsed);
+            
+          } catch (error) {
+            console.error('Failed to parse server message:', msg, error);
+          }
+        });
+      });
+      
+      client.on('error', (error) => {
+        if (error.code === 'ECONNREFUSED' && attemptCount < retries) {
+          // Server not ready yet, retry
+          setTimeout(attemptConnection, 500);
+        } else if (serverSocketConnected) {
+          console.error('Socket error:', error);
+          mainWindow.webContents.send('server-socket-status', {
+            connected: false,
+            error: error.message
+          });
+        } else {
+          reject(error);
+        }
+      });
+      
+      client.on('close', () => {
+        console.log('Socket connection closed');
+        serverSocketConnected = false;
+        serverSocket = null;
+        
+        mainWindow.webContents.send('server-socket-status', {
+          connected: false
+        });
+      });
+      
+      client.on('timeout', () => {
+        client.destroy();
+        if (attemptCount < retries) {
+          setTimeout(attemptConnection, 500);
+        } else {
+          reject(new Error('Connection timeout'));
+        }
+      });
+    };
+    
+    attemptConnection();
+  });
 };
 
 // Get application path
@@ -2877,7 +2347,90 @@ ipcMain.handle('exec-command', async (event, command, cwd) => {
   }
 });
 
-// Process management
+// Start server with socket connection
+ipcMain.handle('start-server-with-socket', async (event, command, cwd, processName) => {
+  try {
+    console.log(`Starting server: ${processName}`);
+    console.log(`Command: ${command}`);
+    console.log(`CWD: ${cwd}`);
+
+    // Start the C++ server process
+    const child = spawn(command, [], {
+      cwd: cwd || process.cwd(),
+      shell: true,
+      detached: false,
+      windowsHide: false,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    const pid = child.pid;
+    
+    if (!pid) {
+      throw new Error('Failed to get process PID');
+    }
+
+    runningProcesses.set(pid, {
+      process: child,
+      name: processName || 'unnamed',
+      command: command,
+      startTime: new Date(),
+      isServer: true
+    });
+
+    console.log(`Server process started with PID: ${pid}`);
+
+    // Still capture stdout/stderr for debugging
+    child.stdout.on('data', (data) => {
+      const output = data.toString();
+      console.log(`[${pid}] STDOUT:`, output);
+    });
+
+    child.stderr.on('data', (data) => {
+      const output = data.toString();
+      console.log(`[${pid}] STDERR:`, output);
+    });
+
+    child.on('exit', (code, signal) => {
+      console.log(`[${pid}] Server process exited with code ${code}, signal ${signal}`);
+      runningProcesses.delete(pid);
+      
+      // Notify UI
+      mainWindow.webContents.send('process-output', {
+        pid,
+        type: 'exit',
+        name: processName,
+        code,
+        signal
+      });
+    });
+
+    child.on('error', (error) => {
+      console.error(`[${pid}] Server process error:`, error);
+      runningProcesses.delete(pid);
+    });
+
+    // Wait a bit for server to start, then connect socket
+    setTimeout(async () => {
+      try {
+        serverSocket = await connectToServer(9000, 30);
+        console.log('Socket connection established');
+      } catch (error) {
+        console.error('Failed to connect to server socket:', error);
+        mainWindow.webContents.send('server-socket-status', {
+          connected: false,
+          error: 'Failed to connect to server'
+        });
+      }
+    }, 500);
+
+    return { success: true, pid };
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Process management (for MATLAB blocks - keep existing functionality)
 ipcMain.handle('start-process', async (event, command, cwd, processName) => {
   try {
     console.log(`Starting process: ${processName || 'unnamed'}`);
@@ -3025,8 +2578,108 @@ ipcMain.handle('kill-all-processes', async () => {
   return { success: true, killedCount: runningProcesses.size };
 });
 
+// Send message to server via socket
+ipcMain.handle('send-to-server', async (event, message) => {
+  if (!serverSocket || !serverSocketConnected) {
+    return { success: false, error: 'Server not connected' };
+  }
+  
+  try {
+    const jsonMsg = JSON.stringify(message) + '\n';
+    serverSocket.write(jsonMsg);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ========================================
+// MATLAB SOCKET SERVER (Port 9001)
+// ========================================
+const startMatlabSocketServer = () => {
+  const port = 9001;
+  
+  matlabSocketServer = net.createServer((client) => {
+    const clientId = `${client.remoteAddress}:${client.remotePort}`;
+    console.log(`[MATLAB Socket] Client connected: ${clientId}`);
+    
+    matlabClients.set(clientId, {
+      socket: client,
+      buffer: ''
+    });
+    
+    client.on('data', (data) => {
+      // Handle data buffering for JSON messages
+      const clientInfo = matlabClients.get(clientId);
+      if (!clientInfo) return;
+      
+      clientInfo.buffer += data.toString();
+      
+      // Process complete JSON messages (separated by newlines)
+      const lines = clientInfo.buffer.split('\n');
+      clientInfo.buffer = lines.pop(); // Keep incomplete line in buffer
+      
+      lines.forEach(line => {
+        if (line.trim()) {
+          try {
+            const parsed = JSON.parse(line);
+            console.log('[MATLAB Socket] Received:', parsed);
+            
+            // Forward to UI
+            mainWindow.webContents.send('matlab-message', parsed);
+            
+          } catch (error) {
+            console.error('[MATLAB Socket] Parse error:', error, 'Data:', line);
+          }
+        }
+      });
+    });
+    
+    client.on('close', () => {
+      console.log(`[MATLAB Socket] Client disconnected: ${clientId}`);
+      matlabClients.delete(clientId);
+    });
+    
+    client.on('error', (error) => {
+      console.error(`[MATLAB Socket] Client error:`, error);
+      matlabClients.delete(clientId);
+    });
+  });
+  
+  matlabSocketServer.on('error', (error) => {
+    console.error('[MATLAB Socket Server] Error:', error);
+  });
+  
+  matlabSocketServer.listen(port, () => {
+    console.log(`[MATLAB Socket Server] Listening on port ${port} for MATLAB blocks`);
+  });
+};
+
+const stopMatlabSocketServer = () => {
+  if (matlabSocketServer) {
+    console.log('[MATLAB Socket Server] Closing...');
+    
+    // Close all client connections
+    matlabClients.forEach((clientInfo, clientId) => {
+      try {
+        clientInfo.socket.destroy();
+      } catch (e) {
+        console.error(`Error closing MATLAB client ${clientId}:`, e);
+      }
+    });
+    matlabClients.clear();
+    
+    // Close server
+    matlabSocketServer.close(() => {
+      console.log('[MATLAB Socket Server] Closed');
+    });
+    matlabSocketServer = null;
+  }
+};
+
 app.whenReady().then(() => {
   createWindow();
+  startMatlabSocketServer(); // Start MATLAB socket server
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -3039,6 +2692,13 @@ app.on('window-all-closed', async () => {
   console.log('App closing - killing all processes');
   await cleanupAllProcesses();
   
+  if (serverSocket) {
+    serverSocket.destroy();
+    serverSocket = null;
+  }
+  
+  stopMatlabSocketServer(); // Stop MATLAB socket server
+  
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -3047,12 +2707,23 @@ app.on('window-all-closed', async () => {
 app.on('before-quit', async () => {
   console.log('App quitting - cleanup');
   await cleanupAllProcesses();
+  
+  if (serverSocket) {
+    serverSocket.destroy();
+    serverSocket = null;
+  }
+  
+  stopMatlabSocketServer(); // Stop MATLAB socket server
 });
 
 // Handle SIGINT (Ctrl+C)
 process.on('SIGINT', async () => {
   console.log('Received SIGINT - cleaning up...');
   await cleanupAllProcesses();
+  if (serverSocket) {
+    serverSocket.destroy();
+    serverSocket = null;
+  }
   process.exit(0);
 });
 
@@ -3060,9 +2731,12 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log('Received SIGTERM - cleaning up...');
   await cleanupAllProcesses();
+  if (serverSocket) {
+    serverSocket.destroy();
+    serverSocket = null;
+  }
   process.exit(0);
 });
-
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\preload.js ---
 const { contextBridge, ipcRenderer } = require('electron');
@@ -3083,6 +2757,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getRunningProcesses: () => ipcRenderer.invoke('get-running-processes'),
   killAllProcesses: () => ipcRenderer.invoke('kill-all-processes'),
   
+  // Server with socket communication
+  startServerWithSocket: (command, cwd, processName) => ipcRenderer.invoke('start-server-with-socket', command, cwd, processName),
+  sendToServer: (message) => ipcRenderer.invoke('send-to-server', message),
+  
   // Directory operations
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   ensureDir: (dirpath) => ipcRenderer.invoke('ensure-dir', dirpath),
@@ -3091,13 +2769,38 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform information
   getPlatform: () => process.platform,
   
-  // Listen to process output
+  // Listen to process output (for MATLAB blocks)
   onProcessOutput: (callback) => {
     const subscription = (event, data) => callback(data);
     ipcRenderer.on('process-output', subscription);
     return () => ipcRenderer.removeListener('process-output', subscription);
   },
-  removeProcessOutputListener: () => ipcRenderer.removeAllListeners('process-output')
+  
+  // Listen to server messages via socket
+  onServerMessage: (callback) => {
+    const subscription = (event, data) => callback(data);
+    ipcRenderer.on('server-message', subscription);
+    return () => ipcRenderer.removeListener('server-message', subscription);
+  },
+  
+  // Listen to MATLAB block messages via socket
+  onMatlabMessage: (callback) => {
+    const subscription = (event, data) => callback(data);
+    ipcRenderer.on('matlab-message', subscription);
+    return () => ipcRenderer.removeListener('matlab-message', subscription);
+  },
+  
+  // Listen to socket connection status
+  onServerSocketStatus: (callback) => {
+    const subscription = (event, data) => callback(data);
+    ipcRenderer.on('server-socket-status', subscription);
+    return () => ipcRenderer.removeListener('server-socket-status', subscription);
+  },
+  
+  removeProcessOutputListener: () => ipcRenderer.removeAllListeners('process-output'),
+  removeServerMessageListener: () => ipcRenderer.removeAllListeners('server-message'),
+  removeMatlabMessageListener: () => ipcRenderer.removeAllListeners('matlab-message'),
+  removeServerSocketStatusListener: () => ipcRenderer.removeAllListeners('server-socket-status')
 });
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\renderer.jsx ---
@@ -4049,7 +3752,7 @@ export const GraphWindow = ({ blockId, blockName, graphType, data, onClose, maxP
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\components\Sidebar.jsx ---
 import React from 'react';
-import { FileCode, Trash2 } from 'lucide-react';
+import { FileCode, Trash2, Wifi, WifiOff } from 'lucide-react';
 
 export const Sidebar = ({ 
   sidebarMode,
@@ -4059,6 +3762,7 @@ export const Sidebar = ({
   serverRunning,
   blockProcesses,
   executionLog,
+  socketConnected,
   onEditCode,
   onDelete,
   onBlockColorChange,
@@ -4149,6 +3853,22 @@ export const Sidebar = ({
                     {serverRunning ? 'Running' : 'Stopped'}
                   </span>
                 </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-700">Socket:</span>
+                  <div className="flex items-center gap-2">
+                    {socketConnected ? (
+                      <>
+                        <Wifi size={16} className="text-green-600" />
+                        <span className="font-semibold text-green-600">Connected</span>
+                      </>
+                    ) : (
+                      <>
+                        <WifiOff size={16} className="text-gray-400" />
+                        <span className="font-semibold text-gray-400">Disconnected</span>
+                      </>
+                    )}
+                  </div>
+                </div>
                 <div className="flex justify-between">
                   <span className="text-gray-700">Active Processes:</span>
                   <span className="font-semibold text-gray-900">{Object.keys(blockProcesses).length}</span>
@@ -4215,10 +3935,9 @@ export const Sidebar = ({
   );
 };
 
-
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\components\Toolbar.jsx ---
 import React from 'react';
-import { Upload, Play, Square, StopCircle, Save, FolderOpen, X } from 'lucide-react';
+import { Upload, Play, Square, StopCircle, Save, FolderOpen, X, Wifi, WifiOff } from 'lucide-react';
 
 export const Toolbar = ({ 
   onStartServer, 
@@ -4230,10 +3949,11 @@ export const Toolbar = ({
   onSave,
   serverRunning,
   isStartingServer,
-  hasProcesses
+  hasProcesses,
+  socketConnected
 }) => {
   return (
-    <div className="bg-white border-b border-gray-300 p-3 flex gap-2 overflow-x-auto">
+    <div className="bg-white border-b border-gray-300 p-3 flex gap-2 items-center overflow-x-auto">
       <button 
         onClick={onStartServer} 
         disabled={serverRunning || isStartingServer}
@@ -4242,6 +3962,27 @@ export const Toolbar = ({
         <Play size={18} />
         {isStartingServer ? 'Starting...' : 'Start Server'}
       </button>
+      
+      {/* Socket Status Indicator */}
+      {serverRunning && (
+        <div className={`px-3 py-2 rounded-md flex items-center gap-2 text-sm font-medium ${
+          socketConnected ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+        }`}>
+          {socketConnected ? (
+            <>
+              <Wifi size={16} />
+              <span>Socket Connected</span>
+            </>
+          ) : (
+            <>
+              <WifiOff size={16} />
+              <span>Connecting...</span>
+            </>
+          )}
+        </div>
+      )}
+      
+      <div className="w-px h-8 bg-gray-300 mx-1"></div>
       
       <button 
         onClick={onStart} 
@@ -4270,6 +4011,8 @@ export const Toolbar = ({
         Terminate
       </button>
       
+      <div className="w-px h-8 bg-gray-300 mx-1"></div>
+      
       <button 
         onClick={onImport}
         className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium flex items-center gap-2 whitespace-nowrap"
@@ -4296,7 +4039,6 @@ export const Toolbar = ({
     </div>
   );
 };
-
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\hooks\useCanvasHandlers.js ---
 import { useState } from 'react';
@@ -5343,10 +5085,10 @@ export const useProcessManager = (addLog) => {
     setBlockMetrics,
     graphData,
     setGraphData,
-    blockStatus
+    blockStatus,
+    setBlockStatus
   };
 };
-
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\hooks\useServerOperations.js ---
 import { topologicalSort } from '../utils/blockUtils';
@@ -5398,7 +5140,6 @@ export const useServerOperations = ({
       }
 
       if (!mexExists) {
-        // Check if pipeline_mex.cpp exists
         const cppSourcePath = `${projectDir}/cpp/pipeline_mex.cpp`;
         let sourceExists = false;
         try {
@@ -5422,7 +5163,7 @@ export const useServerOperations = ({
         }
       }
 
-      // Check if pipe_server.exe exists
+      // Check if pipe_server.exe exists (socket version)
       const serverPath = `${projectDir}/cpp/pipe_server.exe`;
       let serverExists = false;
       try {
@@ -5434,7 +5175,6 @@ export const useServerOperations = ({
       }
 
       if (!serverExists) {
-        // Check if pipe_server.cpp exists
         const cppSourcePath = `${projectDir}/cpp/pipe_server.cpp`;
         let sourceExists = false;
         try {
@@ -5445,16 +5185,16 @@ export const useServerOperations = ({
         }
 
         if (sourceExists) {
-          addLog('info', 'Found pipe_server.cpp - compiling...');
+          addLog('info', 'Found pipe_server.cpp - compiling with socket support...');
           const cppResult = await window.electronAPI.execCommand(
-            'g++ -o pipe_server.exe pipe_server.cpp -lkernel32 -O2',
+            'g++ -o pipe_server.exe pipe_server.cpp -lws2_32 -O2',
             `${projectDir}/cpp`
           );
 
           if (!cppResult.success) {
             throw new Error(`Pipe server compilation failed:\n${cppResult.stderr || cppResult.error}\n\nMake sure g++ is installed and in your PATH.`);
           }
-          addLog('success', 'Pipe server compiled successfully');
+          addLog('success', 'Pipe server compiled successfully with socket support');
         }
       }
 
@@ -5467,7 +5207,6 @@ export const useServerOperations = ({
       connections.forEach((conn, i) => {
         const fromBlock = sortedBlocks.find(b => b.id === conn.fromBlock);
         
-        // Get size for specific output port
         let size = 67108864; // default 64MB
         if (fromBlock) {
           if (Array.isArray(fromBlock.outputSize)) {
@@ -5480,10 +5219,11 @@ export const useServerOperations = ({
         serverCmd += ` ${pipes[i]} ${size}`;
       });
 
-      addLog('info', `Starting parameterized pipe server...`);
+      addLog('info', `Starting parameterized pipe server with socket communication...`);
       addLog('info', `Command: ${serverCmd}`);
       
-      const serverProc = await window.electronAPI.startProcess(
+      // Use the new socket-enabled server start
+      const serverProc = await window.electronAPI.startServerWithSocket(
         serverCmd,
         `${projectDir}/cpp`,
         'server'
@@ -5498,7 +5238,8 @@ export const useServerOperations = ({
         ...prev, 
         server: { pid: serverProc.pid, status: 'running', name: 'server' } 
       }));
-      addLog('success', `Pipe server started (PID: ${serverProc.pid})`);
+      addLog('success', `Pipe server started with socket communication (PID: ${serverProc.pid})`);
+      addLog('info', 'Waiting for socket connection...');
       
     } catch (err) {
       addLog('error', `Server start failed: ${err.message}`);
@@ -5545,7 +5286,6 @@ export const useServerOperations = ({
     return matlabCmd;
   };
 
-  // Helper function to wait for a block to become ready
   const waitForBlockReady = (blockId, blockName, setBlockProcesses, timeout = 30000) => {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
@@ -5632,7 +5372,6 @@ export const useServerOperations = ({
             }));
             addLog('info', `${block.name} process launched (PID: ${procResult.pid}), waiting for BLOCK_READY...`);
             
-            // Wait for this block to be ready before starting the next one
             try {
               await waitForBlockReady(block.id, block.name, setBlockProcesses);
               addLog('success', `✓ ${block.name} is READY`);
@@ -5716,9 +5455,7 @@ export const useServerOperations = ({
       return;
     }
 
-    try {
-      addLog('info', `Manually starting block: ${block.name}`);
-      
+    try {      
       const sortedBlocks = topologicalSort(blocks, connections);
 
       await window.electronAPI.writeFile(

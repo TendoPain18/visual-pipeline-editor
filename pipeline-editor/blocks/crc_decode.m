@@ -1,5 +1,5 @@
 function crc_decode(pipeIn, pipeOut)
-% CRC_DECODE - ITU-T CRC-32 decoder (continuous hardware-style operation)
+% CRC_DECODE - ITU-T CRC-32 decoder (SOCKET-ONLY VERSION)
 %
 % @BlockConfig
 % name: CrcDecode
@@ -9,17 +9,27 @@ function crc_decode(pipeIn, pipeOut)
 % outputSize: 1501
 % LTR: false
 % startWithAll: true
+% socketHost: localhost
+% socketPort: 9001
 % polynomial: 0x04C11DB7
 % description: CRC-32 decoder with error detection - continuous operation
 % @EndBlockConfig
 
     config = parse_block_config();
-    send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
+    
+    % SOCKET CONNECTION (REQUIRED)
+    socketObj = matlab_socket_client(config.socketHost, config.socketPort, 10);
+    
+    if isempty(socketObj)
+        error('Failed to connect to socket server. Make sure Electron is running!');
+    end
+    
+    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
     
     try
         crcTable = build_crc32_table();
         
-        send_protocol_message('BLOCK_READY', config.blockId, config.name, '');
+        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
         
         frameCount = 0;
         errorCount = 0;
@@ -69,7 +79,7 @@ function crc_decode(pipeIn, pipeOut)
             metrics = struct();
             metrics.frames = frameCount;
             metrics.gbps = instantGbps;
-            send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
             
             if mod(frameCount, 1000) == 0
                 errorRate = 100.0 * errorCount / frameCount;
@@ -78,7 +88,8 @@ function crc_decode(pipeIn, pipeOut)
         end
         
     catch ME
-        send_protocol_message('BLOCK_ERROR', config.blockId, config.name, ME.message);
+        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
+        clear socketObj;
         rethrow(ME);
     end
 end

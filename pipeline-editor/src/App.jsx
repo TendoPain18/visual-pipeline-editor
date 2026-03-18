@@ -24,8 +24,11 @@ const PipelineEditor = () => {
   const [clipboard, setClipboard] = useState(null);
   const [isStartingServer, setIsStartingServer] = useState(false);
   const [graphWindows, setGraphWindows] = useState({});
+  const [socketConnected, setSocketConnected] = useState(false);
   
   const canvasRef = useRef(null);
+  const serverMessageListenerRef = useRef(null);
+  const socketStatusListenerRef = useRef(null);
 
   const addLog = (type, message) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -53,7 +56,8 @@ const PipelineEditor = () => {
     setBlockMetrics,
     graphData,
     setGraphData,
-    blockStatus
+    blockStatus,
+    setBlockStatus
   } = useProcessManager(addLog);
 
   const {
@@ -159,6 +163,7 @@ const PipelineEditor = () => {
     canvasRef
   });
 
+  // Get project directory on mount
   useEffect(() => {
     const getDir = async () => {
       const dir = await window.electronAPI.getAppPath();
@@ -167,6 +172,186 @@ const PipelineEditor = () => {
     getDir();
   }, []);
 
+  // Listen to server socket messages
+  useEffect(() => {
+    if (serverMessageListenerRef.current) {
+      serverMessageListenerRef.current();
+    }
+    
+    serverMessageListenerRef.current = window.electronAPI.onServerMessage((message) => {
+      console.log('Server message received:', message);
+      
+      const { type, message: msg, data, timestamp } = message;
+      
+      switch (type) {
+        case 'CONNECTED':
+          addLog('success', '🔌 Socket connected to server');
+          setSocketConnected(true);
+          break;
+          
+        case 'STATUS':
+          addLog('info', `[Server] ${msg}`);
+          break;
+          
+        case 'PIPE_CREATED':
+          addLog('success', `[Server] ${msg}`);
+          break;
+          
+        case 'READY':
+          addLog('success', `[Server] ${msg}`);
+          setServerRunning(true);
+          break;
+          
+        case 'ERROR':
+          addLog('error', `[Server] ${msg}`);
+          break;
+          
+        case 'HEARTBEAT':
+          // Don't log heartbeats to keep log clean
+          console.log('[Server Heartbeat]');
+          break;
+          
+        case 'SHUTDOWN':
+          addLog('warning', `[Server] ${msg}`);
+          setServerRunning(false);
+          setSocketConnected(false);
+          break;
+          
+        default:
+          addLog('info', `[Server] ${type}: ${msg}`);
+      }
+    });
+    
+    return () => {
+      if (serverMessageListenerRef.current) {
+        serverMessageListenerRef.current();
+      }
+    };
+  }, []);
+
+  // Listen to socket connection status
+  useEffect(() => {
+    if (socketStatusListenerRef.current) {
+      socketStatusListenerRef.current();
+    }
+    
+    socketStatusListenerRef.current = window.electronAPI.onServerSocketStatus((status) => {
+      console.log('Socket status:', status);
+      
+      if (status.connected) {
+        setSocketConnected(true);
+        addLog('success', `Socket connected on port ${status.port || 9000}`);
+      } else {
+        setSocketConnected(false);
+        if (status.error) {
+          addLog('error', `Socket error: ${status.error}`);
+        } else {
+          addLog('warning', 'Socket disconnected');
+        }
+        setServerRunning(false);
+      }
+    });
+    
+    return () => {
+      if (socketStatusListenerRef.current) {
+        socketStatusListenerRef.current();
+      }
+    };
+  }, []);
+
+  // Listen to MATLAB block messages via socket
+  useEffect(() => {
+    const listener = window.electronAPI.onMatlabMessage((message) => {
+      console.log('MATLAB socket message:', message);
+      
+      const { protocol, blockId, blockName, type, data, timestamp } = message;
+      
+      switch (type) {
+        case 'BLOCK_INIT':
+          addLog('info', `[${blockName}] Initializing...`);
+          setBlockStatus(prev => ({ ...prev, [blockId]: 'initializing' }));
+          break;
+          
+        case 'BLOCK_READY':
+          addLog('success', `[${blockName}] Ready`);
+          setBlockStatus(prev => ({ ...prev, [blockId]: 'ready' }));
+          // Mark as running in blockProcesses
+          setBlockProcesses(prev => {
+            const blockEntry = Object.entries(prev).find(([key, proc]) => 
+              proc.name === blockName
+            );
+            if (blockEntry) {
+              const [key, proc] = blockEntry;
+              return {
+                ...prev,
+                [key]: { ...proc, status: 'running' }
+              };
+            }
+            return prev;
+          });
+          break;
+          
+        case 'BLOCK_METRICS':
+          setBlockMetrics(prev => ({
+            ...prev,
+            [blockId]: {
+              frames: data.frames || 0,
+              gbps: data.gbps || 0,
+              totalGB: data.totalGB,
+              totalFrames: data.totalFrames
+            }
+          }));
+          break;
+          
+        case 'BLOCK_GRAPH':
+          const graphPoint = { x: data.x, y: data.y };
+          setGraphData(prev => {
+            const existing = prev[blockId] || { xData: [], yData: [] };
+            const maxPoints = 500;
+            
+            const newXData = [...existing.xData, graphPoint.x];
+            const newYData = [...existing.yData, graphPoint.y];
+            
+            if (newXData.length > maxPoints) {
+              newXData.shift();
+              newYData.shift();
+            }
+            
+            return {
+              ...prev,
+              [blockId]: {
+                xData: newXData,
+                yData: newYData
+              }
+            };
+          });
+          break;
+          
+        case 'BLOCK_ERROR':
+          addLog('error', `[${blockName}] ${data.error || data.status || 'Error'}`);
+          setBlockStatus(prev => ({ ...prev, [blockId]: 'error' }));
+          break;
+          
+        case 'BLOCK_STOPPING':
+          addLog('info', `[${blockName}] Stopping...`);
+          setBlockStatus(prev => ({ ...prev, [blockId]: 'stopping' }));
+          break;
+          
+        case 'BLOCK_STOPPED':
+          addLog('info', `[${blockName}] Stopped`);
+          setBlockStatus(prev => {
+            const newStatus = { ...prev };
+            delete newStatus[blockId];
+            return newStatus;
+          });
+          break;
+      }
+    });
+    
+    return () => listener();
+  }, []);
+
+  // Update graph windows when graph data changes
   useEffect(() => {
     Object.entries(graphData).forEach(([blockId, data]) => {
       if (!graphWindows[blockId]) {
@@ -263,10 +448,8 @@ const PipelineEditor = () => {
     const block = selectedBlocks[0];
     
     try {
-      // Re-parse the block to get updated configuration
       const reparsedData = parseMatlabBlock(updatedCode, block.fileName);
       
-      // Calculate new port positions based on updated inputs/outputs
       const newPortPositions = calculatePortPositions(
         reparsedData.inputs, 
         reparsedData.outputs, 
@@ -276,7 +459,6 @@ const PipelineEditor = () => {
         GRID_SIZE
       );
       
-      // Create updated block with ALL new properties from parsed config
       const updatedBlock = { 
         ...block, 
         code: updatedCode,
@@ -297,7 +479,6 @@ const PipelineEditor = () => {
         description: reparsedData.description
       };
       
-      // Find connections that need to be removed due to port changes
       const removedConnections = connections.filter(conn => {
         if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) {
           return true;
@@ -308,7 +489,6 @@ const PipelineEditor = () => {
         return false;
       });
       
-      // Update blocks array
       const newBlocks = blocks.map(b => b.id === block.id ? updatedBlock : b);
       const newConnections = connections.filter(conn => !removedConnections.includes(conn));
       
@@ -355,7 +535,6 @@ const PipelineEditor = () => {
     handleCanvasClick(e);
   };
 
-
   useKeyboardShortcuts({
     onUndo: handleUndo,
     onRedo: handleRedo,
@@ -380,6 +559,7 @@ const PipelineEditor = () => {
         blockProcesses={blockProcesses}
         blockStatus={blockStatus}
         executionLog={executionLog}
+        socketConnected={socketConnected}
         onEditCode={handleEditBlockCode}
         onDelete={handleDelete}
         onBlockColorChange={(block, color) => {
@@ -415,6 +595,7 @@ const PipelineEditor = () => {
           serverRunning={serverRunning}
           isStartingServer={isStartingServer}
           hasProcesses={Object.keys(blockProcesses).length > 0}
+          socketConnected={socketConnected}
         />
         
         <div className="flex-1 overflow-auto bg-gray-50">

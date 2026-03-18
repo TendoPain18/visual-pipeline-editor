@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileCode, Trash2 } from 'lucide-react';
+import { FileCode, Trash2, Wifi, WifiOff } from 'lucide-react';
 
 export const Sidebar = ({ 
   sidebarMode,
@@ -9,6 +9,7 @@ export const Sidebar = ({
   serverRunning,
   blockProcesses,
   executionLog,
+  socketConnected,
   onEditCode,
   onDelete,
   onBlockColorChange,
@@ -98,6 +99,22 @@ export const Sidebar = ({
                   <span className={`font-semibold ${serverRunning ? 'text-green-600' : 'text-red-600'}`}>
                     {serverRunning ? 'Running' : 'Stopped'}
                   </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-700">Socket:</span>
+                  <div className="flex items-center gap-2">
+                    {socketConnected ? (
+                      <>
+                        <Wifi size={16} className="text-green-600" />
+                        <span className="font-semibold text-green-600">Connected</span>
+                      </>
+                    ) : (
+                      <>
+                        <WifiOff size={16} className="text-gray-400" />
+                        <span className="font-semibold text-gray-400">Disconnected</span>
+                      </>
+                    )}
+                  </div>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-700">Active Processes:</span>

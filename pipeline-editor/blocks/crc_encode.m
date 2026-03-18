@@ -1,5 +1,5 @@
 function crc_encode(pipeIn, pipeOut)
-% CRC_ENCODE - ITU-T CRC-32 encoder (continuous hardware-style operation)
+% CRC_ENCODE - ITU-T CRC-32 encoder (SOCKET-ONLY VERSION)
 %
 % @BlockConfig
 % name: CrcEncode
@@ -9,18 +9,28 @@ function crc_encode(pipeIn, pipeOut)
 % outputSize: 1504
 % LTR: true
 % startWithAll: true
+% socketHost: localhost
+% socketPort: 9001
 % polynomial: 0x04C11DB7
 % description: CRC-32 encoder (ITU-T V.42) - continuous operation
 % @EndBlockConfig
 
     config = parse_block_config();
-    send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
+    
+    % SOCKET CONNECTION (REQUIRED)
+    socketObj = matlab_socket_client(config.socketHost, config.socketPort, 10);
+    
+    if isempty(socketObj)
+        error('Failed to connect to socket server. Make sure Electron is running!');
+    end
+    
+    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
     
     try
         % Build CRC-32 lookup table
         crcTable = build_crc32_table();
         
-        send_protocol_message('BLOCK_READY', config.blockId, config.name, '');
+        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
         
         frameCount = 0;
         totalBytes = 0;
@@ -63,11 +73,12 @@ function crc_encode(pipeIn, pipeOut)
             metrics = struct();
             metrics.frames = frameCount;
             metrics.gbps = instantGbps;
-            send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
         end
         
     catch ME
-        send_protocol_message('BLOCK_ERROR', config.blockId, config.name, ME.message);
+        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
+        clear socketObj;
         rethrow(ME);
     end
 end

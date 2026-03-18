@@ -7,7 +7,7 @@ output_file = os.path.join(folder_path, "project_files.txt")
 with open(output_file, "w", encoding="utf-8") as out_file:
     for root, dirs, files in os.walk(folder_path):
         # Skip folders
-        for skip_dir in ["node_modules", "dist", ".vite", "Output_Files", "Test_Files"]:
+        for skip_dir in ["node_modules", "dist", ".vite", "Output_Files", "Test_Files", ".git"]:
             if skip_dir in dirs:
                 dirs.remove(skip_dir)
 

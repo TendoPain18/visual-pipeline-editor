@@ -1,5 +1,5 @@
 function file_source(pipeOut)
-% FILE_SOURCE - Single-pass file transmission
+% FILE_SOURCE - Single-pass file transmission (SOCKET-ONLY VERSION)
 %
 % @BlockConfig
 % name: FileSource
@@ -9,6 +9,8 @@ function file_source(pipeOut)
 % outputSize: 1500
 % LTR: true
 % startWithAll: false
+% socketHost: localhost
+% socketPort: 9001
 % sourceDirectory: C:\Users\amrga\Downloads\final\pipeline-editor\Test_Files
 % loopMode: false
 % description: File source block - sends all files once then exits
@@ -17,17 +19,33 @@ function file_source(pipeOut)
     config = parse_block_config();
     PACKET_SIZE = 1500;
     
-    send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
+    fprintf('\n========================================\n');
+    fprintf('FILE SOURCE - Socket Mode Only\n');
+    fprintf('========================================\n');
+    fprintf('Connecting to socket %s:%d...\n', config.socketHost, config.socketPort);
+    
+    % SOCKET CONNECTION (REQUIRED)
+    socketObj = matlab_socket_client(config.socketHost, config.socketPort, 10);
+    
+    if isempty(socketObj)
+        error('Failed to connect to socket server. Make sure Electron is running!');
+    end
+    
+    fprintf('✓ Socket connected\n');
+    fprintf('========================================\n\n');
+    
+    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
 
     try
         if ~exist(config.sourceDirectory, 'dir')
             mkdir(config.sourceDirectory);
             fprintf('Created source directory. Add files and restart.\n');
-            send_protocol_message('BLOCK_ERROR', config.blockId, config.name, 'No source directory');
+            send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, 'No source directory');
+            clear socketObj;
             return;
         end
         
-        send_protocol_message('BLOCK_READY', config.blockId, config.name, '');
+        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
         
         packetCount = 0;
         totalBytes = 0;
@@ -41,7 +59,8 @@ function file_source(pipeOut)
         
         if isempty(fileList)
             fprintf('No files found in source directory.\n');
-            send_protocol_message('BLOCK_ERROR', config.blockId, config.name, 'No files to send');
+            send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, 'No files to send');
+            clear socketObj;
             return;
         end
         
@@ -106,7 +125,7 @@ function file_source(pipeOut)
                 metrics.frames = packetCount;
                 metrics.gbps = instantGbps;
                 metrics.totalGB = totalBytes / 1e9;
-                send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+                send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
             end
             
             % Send END marker after each file
@@ -120,7 +139,7 @@ function file_source(pipeOut)
             metrics.frames = packetCount;
             metrics.gbps = instantGbps;
             metrics.totalGB = totalBytes / 1e9;
-            send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
+            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
             
             fprintf('  Sent: %d packets (%.2f KB)\n', numPackets, actualFileSize/1024);
         end
@@ -133,13 +152,25 @@ function file_source(pipeOut)
         fprintf('Total data:       %.2f MB\n', totalBytes/1e6);
         fprintf('========================================\n');
         
+        % Final metrics
+        finalMetrics = struct();
+        finalMetrics.frames = packetCount;
+        finalMetrics.gbps = 0;
+        finalMetrics.totalGB = totalBytes / 1e9;
+        send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, finalMetrics);
+        
         % Wait 5 seconds before closing
         fprintf('\nWaiting 5 seconds before exit...\n');
         pause(5);
         fprintf('Exiting.\n');
         
+        % Cleanup socket
+        send_socket_message(socketObj, 'BLOCK_STOPPED', config.blockId, config.name, '');
+        clear socketObj;
+        
     catch ME
-        send_protocol_message('BLOCK_ERROR', config.blockId, config.name, ME.message);
+        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
+        clear socketObj;
         rethrow(ME);
     end
 end
@@ -165,14 +196,12 @@ end
 function startPacket = create_start_marker()
     PACKET_SIZE = 1500;
     startPacket = zeros(PACKET_SIZE, 1, 'int8');
-    % START marker: 0x53 0x54 0x41 0x52 ("STAR")
     startPacket(1:4) = int8(int32([0x53, 0x54, 0x41, 0x52]) - 128);
 end
 
 function endPacket = create_end_marker()
     PACKET_SIZE = 1500;
     endPacket = zeros(PACKET_SIZE, 1, 'int8');
-    % END marker: 0x45 0x4E 0x44 0x00 ("END\0")
     endPacket(1:4) = int8(int32([0x45, 0x4E, 0x44, 0x00]) - 128);
 end
 
