@@ -3,17 +3,8 @@ export const BLOCK_WIDTH = 140;
 export const BLOCK_HEIGHT = 80;
 
 /**
- * Parse a MATLAB block_config struct literal with BATCH PROCESSING support.
- *
- * New batch processing fields:
- *   - inputPacketSizes:  array of packet sizes (bytes) per input port
- *   - inputBatchSizes:   array of batch counts (packets) per input port
- *   - outputPacketSizes: array of packet sizes (bytes) per output port
- *   - outputBatchSizes:  array of batch counts (packets) per output port
- *
- * Backward compatibility:
- *   - Old format (inputSize/outputSize) auto-converted to:
- *     inputPacketSizes = [inputSize], inputBatchSizes = [1]
+ * Parse a MATLAB block_config struct literal from file content.
+ * Extracts configuration from struct(...) definition.
  */
 const parseMatlabStruct = (fileContent) => {
   // Match block_config = struct( ... );  — spans multiple lines
@@ -84,7 +75,10 @@ const calculateBufferSize = (packetSize, batchSize) => {
   return lengthBytes + (packetSize * batchSize);
 };
 
-export const parseMatlabBlock = (fileContent, fileName) => {
+/**
+ * Parse a generic block that uses run_generic_block()
+ */
+const parseGenericBlock = (fileContent, fileName) => {
   const config = parseMatlabStruct(fileContent);
 
   if (!config) {
@@ -109,8 +103,6 @@ export const parseMatlabBlock = (fileContent, fileName) => {
   const numInputs  = typeof config.inputs  === 'number' ? config.inputs  : 1;
   const numOutputs = typeof config.outputs === 'number' ? config.outputs : 1;
 
-  // ===== BATCH PROCESSING SUPPORT =====
-  
   // Parse packet sizes
   let inputPacketSizes = config.inputPacketSizes;
   let outputPacketSizes = config.outputPacketSizes;
@@ -118,19 +110,6 @@ export const parseMatlabBlock = (fileContent, fileName) => {
   // Parse batch sizes
   let inputBatchSizes = config.inputBatchSizes;
   let outputBatchSizes = config.outputBatchSizes;
-  
-  // BACKWARD COMPATIBILITY: Convert old format
-  if (!inputPacketSizes && config.inputSize !== undefined) {
-    inputPacketSizes = config.inputSize;
-    inputBatchSizes = 1;  // Default to single packet batch
-    console.log(`[${fileName}] Auto-converted old inputSize to batch format`);
-  }
-  
-  if (!outputPacketSizes && config.outputSize !== undefined) {
-    outputPacketSizes = config.outputSize;
-    outputBatchSizes = 1;  // Default to single packet batch
-    console.log(`[${fileName}] Auto-converted old outputSize to batch format`);
-  }
   
   // Ensure arrays
   inputPacketSizes = Array.isArray(inputPacketSizes) ? inputPacketSizes : [inputPacketSizes || 0];
@@ -165,7 +144,7 @@ export const parseMatlabBlock = (fileContent, fileName) => {
   const inputLengthBytes = inputBatchSizes.map(calculateLengthBytes);
   const outputLengthBytes = outputBatchSizes.map(calculateLengthBytes);
   
-  // Total sizes for backward compatibility and display
+  // Total sizes for display
   const totalInputSize = inputBufferSizes.reduce((a, b) => a + b, 0);
   const totalOutputSize = outputBufferSizes.reduce((a, b) => a + b, 0);
 
@@ -204,17 +183,17 @@ export const parseMatlabBlock = (fileContent, fileName) => {
     inputs:       numInputs,
     outputs:      numOutputs,
     
-    // NEW BATCH PROCESSING FIELDS
-    inputPacketSizes,      // Array: bytes per packet for each input
-    inputBatchSizes,       // Array: packets per batch for each input
-    outputPacketSizes,     // Array: bytes per packet for each output
-    outputBatchSizes,      // Array: packets per batch for each output
-    inputBufferSizes,      // Array: total buffer size (with length header) for each input
-    outputBufferSizes,     // Array: total buffer size (with length header) for each output
-    inputLengthBytes,      // Array: length header size for each input
-    outputLengthBytes,     // Array: length header size for each output
+    // BATCH PROCESSING FIELDS
+    inputPacketSizes,
+    inputBatchSizes,
+    outputPacketSizes,
+    outputBatchSizes,
+    inputBufferSizes,
+    outputBufferSizes,
+    inputLengthBytes,
+    outputLengthBytes,
     
-    // LEGACY FIELDS (for backward compatibility)
+    // LEGACY FIELDS (for display)
     inputSize: totalInputSize,
     outputSize: totalOutputSize,
     inputSizes: inputBufferSizes,
@@ -230,6 +209,29 @@ export const parseMatlabBlock = (fileContent, fileName) => {
     isGraph,
     graphType:    config.graphType || null
   };
+};
+
+/**
+ * Main block parser - detects and parses generic blocks
+ */
+export const parseMatlabBlock = (fileContent, fileName) => {
+  // Check if this is a generic block (looks for run_generic_block call)
+  const isGenericBlock = fileContent.includes('run_generic_block');
+  
+  if (isGenericBlock) {
+    return parseGenericBlock(fileContent, fileName);
+  } else {
+    throw new Error(
+      'Only generic blocks are supported.\n\n' +
+      'Please use the generic block framework with run_generic_block().\n\n' +
+      'Example:\n' +
+      'function my_block(pipeIn, pipeOut)\n' +
+      '    block_config = struct(...);\n' +
+      '    process_fn = @(input, count, data, cfg) your_processing(input, count, data, cfg);\n' +
+      '    run_generic_block(pipeIn, pipeOut, block_config, process_fn);\n' +
+      'end'
+    );
+  }
 };
 
 export const generateColor = (name) => {

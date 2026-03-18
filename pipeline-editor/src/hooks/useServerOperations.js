@@ -35,13 +35,13 @@ export const useServerOperations = ({
       }
 
       addLog('info', 'Creating directories...');
-      await window.electronAPI.ensureDir(`${projectDir}/cpp`);
-      await window.electronAPI.ensureDir(`${projectDir}/blocks`);
+      await window.electronAPI.ensureDir(`${projectDir}/server`);
+      await window.electronAPI.ensureDir(`${projectDir}/matlab_blocks`);
 
       // Check if MEX file exists
       const platform = await window.electronAPI.getPlatform();
       const mexExtension = platform === 'win32' ? 'mexw64' : (platform === 'darwin' ? 'mexmaci64' : 'mexa64');
-      const mexPath = `${projectDir}/cpp/pipeline_mex.${mexExtension}`;
+      const mexPath = `${projectDir}/server/pipeline_mex.${mexExtension}`;
       
       let mexExists = false;
       try {
@@ -53,20 +53,20 @@ export const useServerOperations = ({
       }
 
       if (!mexExists) {
-        const cppSourcePath = `${projectDir}/cpp/pipeline_mex.cpp`;
+        const cppSourcePath = `${projectDir}/server/pipeline_mex.cpp`;
         let sourceExists = false;
         try {
           await window.electronAPI.readFile(cppSourcePath);
           sourceExists = true;
         } catch (e) {
-          throw new Error('pipeline_mex.cpp not found in cpp/ folder. Please add the pipeline_mex.cpp file to the cpp/ directory.');
+          throw new Error('pipeline_mex.cpp not found in server/ folder. Please add the pipeline_mex.cpp file to the server/ directory.');
         }
 
         if (sourceExists) {
           addLog('info', 'Found pipeline_mex.cpp - compiling MEX file...');
           const mexResult = await window.electronAPI.execCommand(
             'matlab -batch "mex pipeline_mex.cpp"',
-            `${projectDir}/cpp`
+            `${projectDir}/server`
           );
 
           if (!mexResult.success) {
@@ -77,7 +77,7 @@ export const useServerOperations = ({
       }
 
       // Check if pipe_server.exe exists
-      const serverPath = `${projectDir}/cpp/pipe_server.exe`;
+      const serverPath = `${projectDir}/server/pipe_server.exe`;
       let serverExists = false;
       try {
         await window.electronAPI.readFile(serverPath);
@@ -88,20 +88,20 @@ export const useServerOperations = ({
       }
 
       if (!serverExists) {
-        const cppSourcePath = `${projectDir}/cpp/pipe_server.cpp`;
+        const cppSourcePath = `${projectDir}/server/pipe_server.cpp`;
         let sourceExists = false;
         try {
           await window.electronAPI.readFile(cppSourcePath);
           sourceExists = true;
         } catch (e) {
-          throw new Error('pipe_server.cpp not found in cpp/ folder. Please add the pipe_server.cpp file to the cpp/ directory.');
+          throw new Error('pipe_server.cpp not found in server/ folder. Please add the pipe_server.cpp file to the server/ directory.');
         }
 
         if (sourceExists) {
           addLog('info', 'Found pipe_server.cpp - compiling with socket support...');
           const cppResult = await window.electronAPI.execCommand(
             'g++ -o pipe_server.exe pipe_server.cpp -lws2_32 -O2',
-            `${projectDir}/cpp`
+            `${projectDir}/server`
           );
 
           if (!cppResult.success) {
@@ -150,7 +150,7 @@ export const useServerOperations = ({
       
       const serverProc = await window.electronAPI.startServerWithSocket(
         serverCmd,
-        `${projectDir}/cpp`,
+        `${projectDir}/server`,
         'server'
       );
 
@@ -212,7 +212,7 @@ export const useServerOperations = ({
     
     const matlabCmd = `${functionName}(${args.join(', ')})`;
     
-    return matlabCmd;
+    return `addpath('${projectDir}/matlab_blocks/core'); ${matlabCmd}`;
   };
 
   const waitForBlockReady = (blockId, blockName, setBlockProcesses, timeout = 30000) => {
@@ -255,7 +255,7 @@ export const useServerOperations = ({
       
       for (const block of blocks) {
         await window.electronAPI.writeFile(
-          `${projectDir}/blocks/${block.fileName}`,
+          `${projectDir}/matlab_blocks/${block.fileName}`,
           block.code
         );
       }
@@ -289,7 +289,7 @@ export const useServerOperations = ({
             ? `set BLOCK_ID=${block.id} && set INSTANCE_ID=${instanceConfig.instanceId} && set MATLAB_PORT=${instanceConfig.matlabPort} && `
             : `export BLOCK_ID=${block.id} && export INSTANCE_ID=${instanceConfig.instanceId} && export MATLAB_PORT=${instanceConfig.matlabPort} && `;
           
-          const fullCommand = `${envCmd}matlab -batch "cd('${projectDir}/blocks'); addpath('${projectDir}/cpp'); ${matlabCmd}"`;
+          const fullCommand = `${envCmd}matlab -batch "cd('${projectDir}/matlab_blocks'); addpath('${projectDir}/server'); ${matlabCmd}"`;
           
           const procResult = await window.electronAPI.startProcess(
             fullCommand,
@@ -414,7 +414,7 @@ export const useServerOperations = ({
         : `export BLOCK_ID=${block.id} && export INSTANCE_ID=${instanceConfig.instanceId} && export MATLAB_PORT=${instanceConfig.matlabPort} && `;
       
       const procResult = await window.electronAPI.startProcess(
-        `${envCmd}matlab -batch "cd('${projectDir}/blocks'); addpath('${projectDir}/cpp'); ${matlabCmd}"`,
+        `${envCmd}matlab -batch "cd('${projectDir}/blocks'); addpath('${projectDir}/server'); ${matlabCmd}"`,
         projectDir,
         block.name
       );

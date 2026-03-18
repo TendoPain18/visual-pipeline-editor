@@ -30,9 +30,7 @@ function send_socket_message(socketObj, msgType, blockId, blockName, data)
     % Add data based on type
     switch msgType
         case 'BLOCK_INIT'
-            % KEY CHANGE: include this MATLAB process's real PID so Electron
-            % can register it with the pipe server for crash cleanup.
-            % feature('getpid') returns the PID of the current MATLAB process.
+            % Include MATLAB process PID for crash cleanup
             try
                 matlabPid = feature('getpid');
             catch
@@ -52,12 +50,9 @@ function send_socket_message(socketObj, msgType, blockId, blockName, data)
             end
             
         case 'BLOCK_METRICS'
-            % Data should already be a struct with fields:
-            % frames, gbps, totalGB (optional), totalFrames (optional)
             msg.data = data;
             
         case 'BLOCK_GRAPH'
-            % Data should be struct with x, y fields
             msg.data = data;
             
         case 'BLOCK_STOPPING'
