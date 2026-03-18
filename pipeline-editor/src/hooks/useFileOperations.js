@@ -1,4 +1,5 @@
-import { parseMatlabBlock, calculatePortPositions, BLOCK_WIDTH, BLOCK_HEIGHT, GRID_SIZE } from '../utils/blockUtils';
+import { parseMatlabBlock } from '../utils/blockUtils';
+import { parseCppBlock, isCppBlock } from '../utils/cppBlockUtils';
 
 export const useFileOperations = ({
   blocks,
@@ -12,7 +13,9 @@ export const useFileOperations = ({
   const handleFileUpload = async () => {
     try {
       const filepaths = await window.electronAPI.selectFile([
-        { name: 'MATLAB Files', extensions: ['m'] }
+        { name: 'Block Files', extensions: ['m', 'cpp'] },
+        { name: 'MATLAB Files', extensions: ['m'] },
+        { name: 'C++ Files', extensions: ['cpp'] }
       ]);
       
       if (!filepaths) return;
@@ -29,17 +32,38 @@ export const useFileOperations = ({
           addLog('info', `Reading file: ${filepath}`);
           const content = await window.electronAPI.readFile(filepath);
           const fileName = filepath.split(/[\\/]/).pop();
+          const fileExt = fileName.split('.').pop().toLowerCase();
           
-          addLog('info', `Parsing block: ${fileName}`);
-          const blockData = parseMatlabBlock(content, fileName);
+          let blockData;
+          
+          // Detect language and parse accordingly
+          if (fileExt === 'm') {
+            addLog('info', `Parsing MATLAB block: ${fileName}`);
+            blockData = parseMatlabBlock(content, fileName);
+            blockData.language = 'matlab';
+          } else if (fileExt === 'cpp') {
+            if (isCppBlock(content)) {
+              addLog('info', `Parsing C++ block: ${fileName}`);
+              blockData = parseCppBlock(content, fileName);
+              blockData.language = 'cpp';
+            } else {
+              throw new Error('Not a valid C++ block - missing required headers');
+            }
+          } else {
+            addLog('warning', `Unsupported file type: ${fileExt}`);
+            continue;
+          }
           
           if (blocks.some(b => b.name === blockData.name) || newBlocks.some(b => b.name === blockData.name)) {
             addLog('warning', `Skipping duplicate block: ${blockData.name}`);
             continue;
           }
 
+          // Use safe block ID from main process
+          const blockId = await window.electronAPI.getNextBlockId();
+          
           const newBlock = {
-            id: Date.now() + importedCount * 100,
+            id: blockId,
             ...blockData,
             x: snapToGrid(100),
             y: snapToGrid(100 + ((blocks.length + importedCount) * 30)),
@@ -48,6 +72,7 @@ export const useFileOperations = ({
 
           newBlocks.push(newBlock);
           importedCount++;
+          addLog('success', `Imported ${blockData.language.toUpperCase()} block: ${blockData.name} (ID: ${blockId})`);
         } catch (error) {
           addLog('error', `Failed to import ${filepath.split(/[\\/]/).pop()}: ${error.message}`);
         }
@@ -67,7 +92,7 @@ export const useFileOperations = ({
   const handleSaveDiagram = async () => {
     try {
       const diagram = {
-        version: '1.0',
+        version: '2.0',
         blocks: blocks,
         connections: connections,
         timestamp: new Date().toISOString()
@@ -94,7 +119,6 @@ export const useFileOperations = ({
       
       if (!filepaths || filepaths.length === 0) return;
       
-      // selectFile returns an array, so take the first file
       const filepath = Array.isArray(filepaths) ? filepaths[0] : filepaths;
       
       const content = await window.electronAPI.readFile(filepath);

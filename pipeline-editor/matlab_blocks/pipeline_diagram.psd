@@ -1,142 +1,59 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "blocks": [
     {
-      "id": 1771127503349,
-      "name": "FileSink",
-      "fileName": "file_sink.m",
-      "code": "function file_sink(pipeIn)\n% FILE_SINK - Continuous file reception (INSTANCE-AWARE)\n\nblock_config = struct( ...\n    'name',            'FileSink', ...\n    'inputs',          1, ...\n    'outputs',         0, ...\n    'inputSize',       1501, ...\n    'outputSize',      0, ...\n    'LTR',             false, ...\n    'startWithAll',    true, ...\n    'socketHost',      'localhost', ...\n    'socketPort',      9001, ...\n    'outputDirectory', 'C:\\Users\\amrga\\Downloads\\final\\pipeline-editor\\Output_Files', ...\n    'reportFile',      'error_report.txt', ...\n    'description',     'File sink - receives multiple batches, reports after each batch' ...\n);\n\n    config = parse_block_config(block_config);\n\n    % Get instance-specific MATLAB port from environment\n    matlabPortStr = getenv('MATLAB_PORT');\n    if ~isempty(matlabPortStr)\n        matlabPort = str2double(matlabPortStr);\n    else\n        matlabPort = config.socketPort;\n    end\n\n    % SOCKET CONNECTION (REQUIRED)\n    socketObj = matlab_socket_client(config.socketHost, matlabPort, 10);\n\n    if isempty(socketObj)\n        error('Failed to connect to socket server. Make sure Electron is running!');\n    end\n\n    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');\n\n    try\n        if ~exist(config.outputDirectory, 'dir')\n            mkdir(config.outputDirectory);\n        end\n\n        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');\n\n        packetCount = 0;\n        totalBytes  = 0;\n        startTime   = tic;\n        lastTime    = 0;\n        lastBytes   = 0;\n\n        currentFile  = struct();\n        currentFile.active = false;\n        fileStats    = {};\n        totalErrors  = 0;\n\n        while true\n            try\n                packet = pipeline_mex('read', pipeIn, config.inputSize);\n            catch ME\n                fprintf('\\n========================================\\n');\n                fprintf('PIPELINE CLOSED\\n');\n                fprintf('========================================\\n');\n\n                if currentFile.active && ~isempty(currentFile.data)\n                    fprintf('Saving incomplete file: %s\\n', currentFile.name);\n                    save_file(currentFile, config.outputDirectory);\n                    fileStats{end+1} = struct('name', currentFile.name, ...\n                                              'size', length(currentFile.data), ...\n                                              'expected', currentFile.size, ...\n                                              'errors', currentFile.errors, ...\n                                              'packets', currentFile.packets, ...\n                                              'complete', false);\n                    totalErrors = totalErrors + currentFile.errors;\n                end\n\n                fprintf('Generating final error report...\\n');\n                generate_error_report(fileStats, config.outputDirectory, config.reportFile);\n\n                fprintf('\\n========================================\\n');\n                fprintf('RECEPTION SUMMARY\\n');\n                fprintf('========================================\\n');\n                fprintf('Total files received: %d\\n', length(fileStats));\n                fprintf('Total packets:        %d\\n', packetCount);\n                fprintf('Total errors:         %d\\n', totalErrors);\n                fprintf('Total data:           %.2f MB\\n', totalBytes/1e6);\n                fprintf('========================================\\n');\n\n                send_socket_message(socketObj, 'BLOCK_STOPPED', config.blockId, config.name, '');\n                clear socketObj;\n                return;\n            end\n\n            data      = packet(1:1500);\n            errorFlag = packet(1501);\n\n            packetCount = packetCount + 1;\n            totalBytes  = totalBytes + 1500;\n\n            dataBytes = uint8(int32(data) + 128);\n\n            isStart  = (dataBytes(1) == 0x53 && dataBytes(2) == 0x54 && ...\n                       dataBytes(3) == 0x41 && dataBytes(4) == 0x52);\n            isHeader = (dataBytes(1) == 0x46 && dataBytes(2) == 0x49 && ...\n                       dataBytes(3) == 0x4C && dataBytes(4) == 0x45);\n            isEnd    = (dataBytes(1) == 0x45 && dataBytes(2) == 0x4E && ...\n                       dataBytes(3) == 0x44 && dataBytes(4) == 0x00);\n\n            if isStart\n                fprintf('\\n--- START marker received ---\\n');\n                continue;\n            end\n\n            if isEnd\n                fprintf('--- END marker received ---\\n');\n\n                if currentFile.active\n                    if length(currentFile.data) >= currentFile.size\n                        currentFile.data = currentFile.data(1:currentFile.size);\n                        save_file(currentFile, config.outputDirectory);\n                        fileStats{end+1} = struct('name', currentFile.name, ...\n                                                  'size', currentFile.size, ...\n                                                  'expected', currentFile.size, ...\n                                                  'errors', currentFile.errors, ...\n                                                  'packets', currentFile.packets, ...\n                                                  'complete', true);\n                        fprintf('  File complete and saved: %s\\n', currentFile.name);\n                    else\n                        save_file(currentFile, config.outputDirectory);\n                        fileStats{end+1} = struct('name', currentFile.name, ...\n                                                  'size', length(currentFile.data), ...\n                                                  'expected', currentFile.size, ...\n                                                  'errors', currentFile.errors, ...\n                                                  'packets', currentFile.packets, ...\n                                                  'complete', false);\n                        fprintf('  File incomplete: %s (%d/%d bytes)\\n', ...\n                                currentFile.name, length(currentFile.data), currentFile.size);\n                    end\n                    totalErrors = totalErrors + currentFile.errors;\n                    generate_error_report(fileStats, config.outputDirectory, config.reportFile);\n                    currentFile.active = false;\n                end\n\n                currentTime = toc(startTime);\n                elapsed = currentTime - lastTime;\n                if elapsed > 0\n                    instantGbps = ((totalBytes - lastBytes) * 8 / 1e9) / elapsed;\n                else\n                    instantGbps = 0;\n                end\n                lastTime  = currentTime;\n                lastBytes = totalBytes;\n\n                metrics         = struct();\n                metrics.frames  = packetCount;\n                metrics.gbps    = instantGbps;\n                metrics.totalGB = totalBytes / 1e9;\n                send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);\n                fprintf('Total files received: %d, Total packets: %d\\n\\n', length(fileStats), packetCount);\n                continue;\n            end\n\n            if isHeader\n                if currentFile.active\n                    save_file(currentFile, config.outputDirectory);\n                    fileStats{end+1} = struct('name', currentFile.name, ...\n                                              'size', currentFile.size, ...\n                                              'expected', currentFile.size, ...\n                                              'errors', currentFile.errors, ...\n                                              'packets', currentFile.packets, ...\n                                              'complete', true);\n                    totalErrors = totalErrors + currentFile.errors;\n                end\n\n                nameLen  = bitor(uint16(dataBytes(5)), bitshift(uint16(dataBytes(6)), 8));\n                fileName = char(dataBytes(7:6+nameLen)');\n\n                fileSize = uint64(0);\n                for i = 0:7\n                    fileSize = bitor(fileSize, bitshift(uint64(dataBytes(7+nameLen+i)), 8*i));\n                end\n\n                currentFile.active  = true;\n                currentFile.name    = fileName;\n                currentFile.size    = double(fileSize);\n                currentFile.data    = [];\n                currentFile.errors  = 0;\n                currentFile.packets = 0;\n\n                if errorFlag ~= 0\n                    currentFile.errors = currentFile.errors + 1;\n                end\n                currentFile.packets = currentFile.packets + 1;\n\n            else\n                if currentFile.active\n                    currentFile.data    = [currentFile.data; data];\n                    currentFile.packets = currentFile.packets + 1;\n                    if errorFlag ~= 0\n                        currentFile.errors = currentFile.errors + 1;\n                    end\n                end\n            end\n\n            currentTime = toc(startTime);\n            elapsed = currentTime - lastTime;\n            if elapsed > 0\n                instantGbps = ((totalBytes - lastBytes) * 8 / 1e9) / elapsed;\n            else\n                instantGbps = 0;\n            end\n            lastTime  = currentTime;\n            lastBytes = totalBytes;\n\n            metrics         = struct();\n            metrics.frames  = packetCount;\n            metrics.gbps    = instantGbps;\n            metrics.totalGB = totalBytes / 1e9;\n            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);\n        end\n\n    catch ME\n        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);\n        clear socketObj;\n        rethrow(ME);\n    end\nend\n\nfunction save_file(fileInfo, outputDir)\n    filePath = fullfile(outputDir, fileInfo.name);\n    fid = fopen(filePath, 'wb');\n    if fid == -1\n        fprintf('ERROR: Cannot create: %s\\n', filePath);\n        return;\n    end\n    dataBytes = uint8(int32(fileInfo.data) + 128);\n    fwrite(fid, dataBytes);\n    fclose(fid);\n    fprintf('Saved: %s (%.2f KB, %d errors)\\n', fileInfo.name, fileInfo.size/1024, fileInfo.errors);\nend\n\nfunction generate_error_report(fileStats, outputDir, reportFile)\n    reportPath = fullfile(outputDir, reportFile);\n    fid = fopen(reportPath, 'w');\n    if fid == -1, return; end\n\n    fprintf(fid, '========================================\\n');\n    fprintf(fid, 'FILE TRANSMISSION ERROR REPORT\\n');\n    fprintf(fid, '========================================\\n');\n    fprintf(fid, 'Generated: %s\\n', datestr(now));\n    fprintf(fid, 'Total files: %d\\n', length(fileStats));\n    fprintf(fid, '========================================\\n\\n');\n\n    totalErrors  = 0;\n    totalPackets = 0;\n    completeFiles = 0;\n\n    for i = 1:length(fileStats)\n        stat      = fileStats{i};\n        errorRate = 100.0 * stat.errors / stat.packets;\n        totalErrors  = totalErrors  + stat.errors;\n        totalPackets = totalPackets + stat.packets;\n\n        if stat.complete\n            completeFiles = completeFiles + 1;\n            status = 'COMPLETE';\n        else\n            status = 'INCOMPLETE';\n        end\n\n        fprintf(fid, 'File %d: %s [%s]\\n', i, stat.name, status);\n        fprintf(fid, '  Expected Size: %.2f KB\\n', stat.expected/1024);\n        fprintf(fid, '  Actual Size:   %.2f KB\\n', stat.size/1024);\n        fprintf(fid, '  Packets:       %d\\n', stat.packets);\n        fprintf(fid, '  Errors:        %d\\n', stat.errors);\n        fprintf(fid, '  Error Rate:    %.2f%%\\n', errorRate);\n        fprintf(fid, '\\n');\n    end\n\n    fprintf(fid, '========================================\\n');\n    fprintf(fid, 'SUMMARY\\n');\n    fprintf(fid, '========================================\\n');\n    fprintf(fid, 'Complete files:   %d / %d\\n', completeFiles, length(fileStats));\n    fprintf(fid, 'Total packets:    %d\\n', totalPackets);\n    fprintf(fid, 'Total errors:     %d\\n', totalErrors);\n    if totalPackets > 0\n        fprintf(fid, 'Overall error rate: %.2f%%\\n', 100.0 * totalErrors / totalPackets);\n    end\n    fprintf(fid, '========================================\\n');\n    fclose(fid);\nend\n\nfunction config = parse_block_config(block_config)\n    config = block_config;\n    blockIdStr = getenv('BLOCK_ID');\n    if isempty(blockIdStr)\n        config.blockId = 0;\n    else\n        config.blockId = str2double(blockIdStr);\n    end\n    requiredFields = {'name', 'inputs', 'outputs', 'inputSize', 'outputSize'};\n    for i = 1:length(requiredFields)\n        if ~isfield(config, requiredFields{i})\n            error('Missing required field: %s', requiredFields{i});\n        end\n    end\nend",
-      "inputs": 1,
-      "outputs": 0,
-      "inputSize": 1501,
-      "outputSize": 0,
-      "inputSizes": [
-        1501
-      ],
-      "outputSizes": [
-        0
-      ],
-      "description": "File sink - receives multiple batches, reports after each batch",
-      "config": {
-        "name": "FileSink",
-        "inputs": 1,
-        "outputs": 0,
-        "inputSize": 1501,
-        "outputSize": 0,
-        "LTR": false,
-        "startWithAll": true,
-        "socketHost": "localhost",
-        "socketPort": 9001,
-        "outputDirectory": "C:\\Users\\amrga\\Downloads\\final\\pipeline-editor\\Output_Files",
-        "reportFile": "error_report.txt",
-        "description": "File sink - receives multiple batches, reports after each batch"
-      },
-      "color": "#ec4899",
-      "portPositions": {
-        "inputs": [
-          {
-            "x": 140,
-            "y": 40,
-            "type": "input",
-            "index": 0
-          }
-        ],
-        "outputs": []
-      },
-      "sizeRelation": {
-        "type": "sink",
-        "description": "Data sink"
-      },
-      "ltr": false,
-      "startWithAll": true,
-      "isGraph": false,
-      "graphType": null,
-      "x": 160,
-      "y": 260,
-      "zIndex": 12
-    },
-    {
-      "id": 1771127503458,
-      "name": "FileSource",
-      "fileName": "file_source.m",
-      "code": "function file_source(pipeOut)\n% FILE_SOURCE - Single-pass file transmission (INSTANCE-AWARE)\n\nblock_config = struct( ...\n    'name',            'FileSource', ...\n    'inputs',          0, ...\n    'outputs',         1, ...\n    'inputSize',       0, ...\n    'outputSize',      1500, ...\n    'LTR',             true, ...\n    'startWithAll',    false, ...\n    'socketHost',      'localhost', ...\n    'socketPort',      9001, ...\n    'sourceDirectory', 'C:\\Users\\amrga\\Downloads\\final\\pipeline-editor\\Test_Files', ...\n    'loopMode',        false, ...\n    'description',     'File source block - sends all files once then exits' ...\n);\n\n    config     = parse_block_config(block_config);\n    PACKET_SIZE = 1500;\n\n    fprintf('\\n========================================\\n');\n    fprintf('FILE SOURCE - Instance-Aware Socket Mode\\n');\n    fprintf('========================================\\n');\n\n    % Get instance-specific MATLAB port from environment\n    matlabPortStr = getenv('MATLAB_PORT');\n    if ~isempty(matlabPortStr)\n        matlabPort = str2double(matlabPortStr);\n        fprintf('Instance MATLAB Port: %d\\n', matlabPort);\n    else\n        matlabPort = config.socketPort;\n        fprintf('Warning: Using default port: %d\\n', matlabPort);\n    end\n\n    fprintf('Connecting to socket %s:%d...\\n', config.socketHost, matlabPort);\n\n    socketObj = matlab_socket_client(config.socketHost, matlabPort, 10);\n\n    if isempty(socketObj)\n        error('Failed to connect to socket server. Make sure Electron is running!');\n    end\n\n    fprintf('? Socket connected\\n');\n    fprintf('========================================\\n\\n');\n\n    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');\n\n    try\n        if ~exist(config.sourceDirectory, 'dir')\n            mkdir(config.sourceDirectory);\n            fprintf('Created source directory. Add files and restart.\\n');\n            send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, 'No source directory');\n            clear socketObj;\n            return;\n        end\n\n        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');\n\n        packetCount = 0;\n        totalBytes  = 0;\n        startTime   = tic;\n        lastTime    = 0;\n        lastBytes   = 0;\n        instantGbps = 0;\n\n        fileList = dir(fullfile(config.sourceDirectory, '*.*'));\n        fileList = fileList(~[fileList.isdir]);\n\n        if isempty(fileList)\n            fprintf('No files found in source directory.\\n');\n            send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, 'No files to send');\n            clear socketObj;\n            return;\n        end\n\n        fprintf('Found %d file(s) to send\\n\\n', length(fileList));\n\n        for fileIdx = 1:length(fileList)\n            fileName = fileList(fileIdx).name;\n            filePath = fullfile(config.sourceDirectory, fileName);\n\n            fprintf('Sending: %s\\n', fileName);\n\n            fid = fopen(filePath, 'rb');\n            if fid == -1\n                fprintf('ERROR: Cannot open: %s\\n', fileName);\n                continue;\n            end\n            fileData = fread(fid, '*uint8');\n            fclose(fid);\n\n            actualFileSize = length(fileData);\n\n            % START marker\n            startPacket = create_start_marker(PACKET_SIZE);\n            pipeline_mex('write', pipeOut, startPacket);\n            packetCount = packetCount + 1;\n            totalBytes  = totalBytes + PACKET_SIZE;\n\n            % Header\n            headerPacket = create_file_header(fileName, actualFileSize, PACKET_SIZE);\n            pipeline_mex('write', pipeOut, headerPacket);\n            packetCount = packetCount + 1;\n            totalBytes  = totalBytes + PACKET_SIZE;\n\n            % Data packets\n            numPackets = ceil(length(fileData) / PACKET_SIZE);\n            for pktIdx = 1:numPackets\n                startIdx = (pktIdx - 1) * PACKET_SIZE + 1;\n                endIdx   = min(pktIdx * PACKET_SIZE, length(fileData));\n\n                packet  = zeros(PACKET_SIZE, 1, 'int8');\n                dataLen = endIdx - startIdx + 1;\n                packet(1:dataLen) = int8(int32(fileData(startIdx:endIdx)) - 128);\n\n                pipeline_mex('write', pipeOut, packet);\n\n                packetCount = packetCount + 1;\n                totalBytes  = totalBytes + PACKET_SIZE;\n\n                currentTime = toc(startTime);\n                elapsed = currentTime - lastTime;\n                if elapsed > 0\n                    instantGbps = ((totalBytes - lastBytes) * 8 / 1e9) / elapsed;\n                end\n                lastTime  = currentTime;\n                lastBytes = totalBytes;\n\n                metrics        = struct();\n                metrics.frames = packetCount;\n                metrics.gbps   = instantGbps;\n                metrics.totalGB = totalBytes / 1e9;\n                send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);\n            end\n\n            % END marker\n            endPacket = create_end_marker(PACKET_SIZE);\n            pipeline_mex('write', pipeOut, endPacket);\n            packetCount = packetCount + 1;\n            totalBytes  = totalBytes + PACKET_SIZE;\n\n            metrics        = struct();\n            metrics.frames = packetCount;\n            metrics.gbps   = instantGbps;\n            metrics.totalGB = totalBytes / 1e9;\n            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);\n\n            fprintf('  Sent: %d packets (%.2f KB)\\n', numPackets, actualFileSize/1024);\n        end\n\n        fprintf('\\n========================================\\n');\n        fprintf('TRANSMISSION COMPLETE\\n');\n        fprintf('========================================\\n');\n        fprintf('Total files sent: %d\\n', length(fileList));\n        fprintf('Total packets:    %d\\n', packetCount);\n        fprintf('Total data:       %.2f MB\\n', totalBytes/1e6);\n        fprintf('========================================\\n');\n\n        finalMetrics        = struct();\n        finalMetrics.frames = packetCount;\n        finalMetrics.gbps   = 0;\n        finalMetrics.totalGB = totalBytes / 1e9;\n        send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, finalMetrics);\n\n        fprintf('\\nWaiting 5 seconds before exit...\\n');\n        pause(5);\n        fprintf('Exiting.\\n');\n\n        send_socket_message(socketObj, 'BLOCK_STOPPED', config.blockId, config.name, '');\n        clear socketObj;\n\n    catch ME\n        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);\n        clear socketObj;\n        rethrow(ME);\n    end\nend\n\nfunction headerPacket = create_file_header(fileName, fileSize, PACKET_SIZE)\n    headerPacket = zeros(PACKET_SIZE, 1, 'int8');\n    headerPacket(1:4) = int8(int32([0x46, 0x49, 0x4C, 0x45]) - 128);\n    fileNameBytes = uint8(fileName);\n    nameLen = length(fileNameBytes);\n    headerPacket(5) = int8(int32(bitand(nameLen, 0xFF)) - 128);\n    headerPacket(6) = int8(int32(bitshift(nameLen, -8)) - 128);\n    for i = 1:nameLen\n        headerPacket(6 + i) = int8(int32(fileNameBytes(i)) - 128);\n    end\n    sizePos    = 7 + nameLen;\n    fileSize64 = uint64(fileSize);\n    for i = 0:7\n        headerPacket(sizePos + i) = int8(int32(bitand(bitshift(fileSize64, -8*i), uint64(0xFF))) - 128);\n    end\nend\n\nfunction startPacket = create_start_marker(PACKET_SIZE)\n    startPacket = zeros(PACKET_SIZE, 1, 'int8');\n    startPacket(1:4) = int8(int32([0x53, 0x54, 0x41, 0x52]) - 128);\nend\n\nfunction endPacket = create_end_marker(PACKET_SIZE)\n    endPacket = zeros(PACKET_SIZE, 1, 'int8');\n    endPacket(1:4) = int8(int32([0x45, 0x4E, 0x44, 0x00]) - 128);\nend\n\nfunction config = parse_block_config(block_config)\n    config = block_config;\n    blockIdStr = getenv('BLOCK_ID');\n    if isempty(blockIdStr)\n        config.blockId = 0;\n    else\n        config.blockId = str2double(blockIdStr);\n    end\n    requiredFields = {'name', 'inputs', 'outputs', 'inputSize', 'outputSize'};\n    for i = 1:length(requiredFields)\n        if ~isfield(config, requiredFields{i})\n            error('Missing required field: %s', requiredFields{i});\n        end\n    end\nend",
-      "inputs": 0,
-      "outputs": 1,
-      "inputSize": 0,
-      "outputSize": 1500,
-      "inputSizes": [
-        0
-      ],
-      "outputSizes": [
-        1500
-      ],
-      "description": "File source block - sends all files once then exits",
-      "config": {
-        "name": "FileSource",
-        "inputs": 0,
-        "outputs": 1,
-        "inputSize": 0,
-        "outputSize": 1500,
-        "LTR": true,
-        "startWithAll": false,
-        "socketHost": "localhost",
-        "socketPort": 9001,
-        "sourceDirectory": "C:\\Users\\amrga\\Downloads\\final\\pipeline-editor\\Test_Files",
-        "loopMode": false,
-        "description": "File source block - sends all files once then exits"
-      },
-      "color": "#ec4899",
-      "portPositions": {
-        "inputs": [],
-        "outputs": [
-          {
-            "x": 140,
-            "y": 40,
-            "type": "output",
-            "index": 0
-          }
-        ]
-      },
-      "sizeRelation": {
-        "type": "source",
-        "description": "Data source"
-      },
-      "ltr": true,
-      "startWithAll": false,
-      "isGraph": false,
-      "graphType": null,
-      "x": 160,
-      "y": 140,
-      "zIndex": 14
-    },
-    {
-      "id": 1771127503567,
+      "id": 1000,
       "name": "CrcDecode",
       "fileName": "crc_decode.m",
-      "code": "function crc_decode(pipeIn, pipeOut)\n% CRC_DECODE - ITU-T CRC-32 decoder (INSTANCE-AWARE)\n\nblock_config = struct( ...\n    'name',        'CrcDecode', ...\n    'inputs',      1, ...\n    'outputs',     1, ...\n    'inputSize',   1504, ...\n    'outputSize',  1501, ...\n    'LTR',         false, ...\n    'startWithAll', true, ...\n    'socketHost',  'localhost', ...\n    'socketPort',  9001, ...\n    'polynomial',  79764919, ...\n    'description', 'CRC-32 decoder with error detection - continuous operation' ...\n);\n\n    config = parse_block_config(block_config);\n\n    % Get instance-specific MATLAB port from environment\n    matlabPortStr = getenv('MATLAB_PORT');\n    if ~isempty(matlabPortStr)\n        matlabPort = str2double(matlabPortStr);\n    else\n        matlabPort = config.socketPort;\n    end\n\n    % SOCKET CONNECTION (REQUIRED)\n    socketObj = matlab_socket_client(config.socketHost, matlabPort, 10);\n\n    if isempty(socketObj)\n        error('Failed to connect to socket server. Make sure Electron is running!');\n    end\n\n    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');\n\n    try\n        crcTable = build_crc32_table();\n\n        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');\n\n        frameCount = 0;\n        errorCount = 0;\n        totalBytes = 0;\n        startTime  = tic;\n        lastTime   = 0;\n        lastBytes  = 0;\n\n        while true\n            inputData = pipeline_mex('read', pipeIn, config.inputSize);\n\n            dataInt8 = inputData(1:1500);\n            crcInt8  = inputData(1501:1504);\n\n            dataAsUint8    = typecast(dataInt8, 'uint8');\n            calculatedCrc  = calculate_crc32(dataAsUint8, crcTable);\n\n            crcBytes    = typecast(crcInt8, 'uint8');\n            receivedCrc = typecast(crcBytes, 'uint32');\n\n            if receivedCrc == calculatedCrc\n                errorFlag = int8(0);\n            else\n                errorFlag    = int8(1);\n                errorCount   = errorCount + 1;\n            end\n\n            outputData = zeros(config.outputSize, 1, 'int8');\n            outputData(1:1500) = dataInt8;\n            outputData(1501)   = errorFlag;\n\n            pipeline_mex('write', pipeOut, outputData);\n\n            frameCount = frameCount + 1;\n            totalBytes = totalBytes + length(outputData);\n\n            currentTime = toc(startTime);\n            elapsed = currentTime - lastTime;\n            if elapsed > 0\n                instantGbps = ((totalBytes - lastBytes) * 8 / 1e9) / elapsed;\n            else\n                instantGbps = 0;\n            end\n            lastTime  = currentTime;\n            lastBytes = totalBytes;\n\n            metrics        = struct();\n            metrics.frames = frameCount;\n            metrics.gbps   = instantGbps;\n            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);\n\n            if mod(frameCount, 1000) == 0\n                errorRate = 100.0 * errorCount / frameCount;\n                fprintf('Packets: %d, Errors: %d (%.2f%%)\\n', frameCount, errorCount, errorRate);\n            end\n        end\n\n    catch ME\n        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);\n        clear socketObj;\n        rethrow(ME);\n    end\nend\n\nfunction crcTable = build_crc32_table()\n    poly     = uint32(0xEDB88320);\n    crcTable = zeros(256, 1, 'uint32');\n    for i = 0:255\n        crc = uint32(i);\n        for j = 0:7\n            if bitand(crc, uint32(1))\n                crc = bitxor(bitshift(crc, -1), poly);\n            else\n                crc = bitshift(crc, -1);\n            end\n        end\n        crcTable(i + 1) = crc;\n    end\nend\n\nfunction crc = calculate_crc32(data, crcTable)\n    crc = uint32(0xFFFFFFFF);\n    for i = 1:length(data)\n        tableIdx = bitxor(bitand(crc, uint32(0xFF)), uint32(data(i))) + 1;\n        crc = bitxor(bitshift(crc, -8), crcTable(tableIdx));\n    end\n    crc = bitxor(crc, uint32(0xFFFFFFFF));\nend\n\nfunction config = parse_block_config(block_config)\n    config = block_config;\n    blockIdStr = getenv('BLOCK_ID');\n    if isempty(blockIdStr)\n        config.blockId = 0;\n    else\n        config.blockId = str2double(blockIdStr);\n    end\n    requiredFields = {'name', 'inputs', 'outputs', 'inputSize', 'outputSize'};\n    for i = 1:length(requiredFields)\n        if ~isfield(config, requiredFields{i})\n            error('Missing required field: %s', requiredFields{i});\n        end\n    end\nend",
+      "code": "function crc_decode(pipeIn, pipeOut)\n% CRC_DECODE - ITU-T CRC-32 decoder using generic block framework\n\n    % ========== USER CONFIGURATION ==========\n    block_config = struct( ...\n        'name',              'CrcDecode', ...\n        'inputs',            1, ...\n        'outputs',           1, ...\n        'inputPacketSizes',  1504, ...\n        'inputBatchSizes',   44740, ...\n        'outputPacketSizes', 1501, ...\n        'outputBatchSizes',  44740, ...\n        'LTR',               false, ...\n        'startWithAll',      true, ...\n        'socketHost',        'localhost', ...\n        'socketPort',        9001, ...\n        'description',       'CRC-32 decoder with error detection - batch processing' ...\n    );\n    \n    % ========== CUSTOM INITIALIZATION ==========\n    init_fn = @(config) struct('crcTable', build_crc32_table(), 'errorCount', 0, 'packetCount', 0);\n    \n    % ========== PROCESSING FUNCTION ==========\n    process_fn = @(inputBatch, actualCount, customData, config) ...\n        process_crc_decode(inputBatch, actualCount, customData, config);\n    \n    % ========== RUN GENERIC BLOCK ==========\n    run_generic_block(pipeIn, pipeOut, block_config, process_fn, init_fn);\nend\n\nfunction [outputBatch, actualOutputCount] = process_crc_decode(inputBatch, actualCount, customData, config)\n    INPUT_PACKET_SIZE = config.inputPacketSizes(1);\n    OUTPUT_PACKET_SIZE = config.outputPacketSizes(1);\n    OUTPUT_BATCH_SIZE = config.outputBatchSizes(1);\n    DATA_SIZE = INPUT_PACKET_SIZE - 4;  % Remove CRC bytes\n    \n    crcTable = customData.crcTable;\n    \n    % Pre-allocate output batch\n    outputBatch = zeros(OUTPUT_BATCH_SIZE * OUTPUT_PACKET_SIZE, 1, 'int8');\n    \n    % Process each packet: check CRC and remove it\n    for pktIdx = 1:actualCount\n        % Extract input packet (data + CRC)\n        inputOffset = (pktIdx - 1) * INPUT_PACKET_SIZE;\n        inputPacket = inputBatch(inputOffset + 1 : inputOffset + INPUT_PACKET_SIZE);\n        \n        % Split data and CRC\n        dataInt8 = inputPacket(1:DATA_SIZE);\n        crcInt8 = inputPacket(DATA_SIZE + 1 : INPUT_PACKET_SIZE);\n        \n        % Calculate CRC on data\n        dataAsUint8 = typecast(dataInt8, 'uint8');\n        calculatedCrc = calculate_crc32(dataAsUint8, crcTable);\n        \n        % Extract received CRC\n        crcBytes = typecast(crcInt8, 'uint8');\n        receivedCrc = typecast(crcBytes, 'uint32');\n        \n        % Compare CRCs\n        if receivedCrc == calculatedCrc\n            errorFlag = int8(0);\n        else\n            errorFlag = int8(1);\n            customData.errorCount = customData.errorCount + 1;\n        end\n        \n        % Create output packet (data + error flag)\n        outputOffset = (pktIdx - 1) * OUTPUT_PACKET_SIZE;\n        outputBatch(outputOffset + 1 : outputOffset + DATA_SIZE) = dataInt8;\n        outputBatch(outputOffset + OUTPUT_PACKET_SIZE) = errorFlag;\n        \n        customData.packetCount = customData.packetCount + 1;\n    end\n    \n    actualOutputCount = actualCount;\n    \n    % Periodic error reporting\n    if mod(customData.packetCount, 100000) == 0\n        errorRate = 100.0 * customData.errorCount / customData.packetCount;\n        fprintf('Packets: %d, Errors: %d (%.2f%%)\\n', ...\n                customData.packetCount, customData.errorCount, errorRate);\n    end\nend\n\nfunction crcTable = build_crc32_table()\n    poly = uint32(0xEDB88320);\n    crcTable = zeros(256, 1, 'uint32');\n    for i = 0:255\n        crc = uint32(i);\n        for j = 0:7\n            if bitand(crc, uint32(1))\n                crc = bitxor(bitshift(crc, -1), poly);\n            else\n                crc = bitshift(crc, -1);\n            end\n        end\n        crcTable(i + 1) = crc;\n    end\nend\n\nfunction crc = calculate_crc32(data, crcTable)\n    crc = uint32(0xFFFFFFFF);\n    for i = 1:length(data)\n        tableIdx = bitxor(bitand(crc, uint32(0xFF)), uint32(data(i))) + 1;\n        crc = bitxor(bitshift(crc, -8), crcTable(tableIdx));\n    end\n    crc = bitxor(crc, uint32(0xFFFFFFFF));\nend",
       "inputs": 1,
       "outputs": 1,
-      "inputSize": 1504,
-      "outputSize": 1501,
-      "inputSizes": [
+      "inputPacketSizes": [
         1504
       ],
-      "outputSizes": [
+      "inputBatchSizes": [
+        44740
+      ],
+      "outputPacketSizes": [
         1501
       ],
-      "description": "CRC-32 decoder with error detection - continuous operation",
+      "outputBatchSizes": [
+        44740
+      ],
+      "inputBufferSizes": [
+        67288962
+      ],
+      "outputBufferSizes": [
+        67154742
+      ],
+      "inputLengthBytes": [
+        2
+      ],
+      "outputLengthBytes": [
+        2
+      ],
+      "inputSize": 67288962,
+      "outputSize": 67154742,
+      "inputSizes": [
+        67288962
+      ],
+      "outputSizes": [
+        67154742
+      ],
+      "description": "CRC-32 decoder with error detection - batch processing",
       "config": {
         "name": "CrcDecode",
         "inputs": 1,
         "outputs": 1,
-        "inputSize": 1504,
-        "outputSize": 1501,
+        "inputPacketSizes": 1504,
+        "inputBatchSizes": 44740,
+        "outputPacketSizes": 1501,
+        "outputBatchSizes": 44740,
         "LTR": false,
         "startWithAll": true,
         "socketHost": "localhost",
         "socketPort": 9001,
-        "polynomial": 79764919,
-        "description": "CRC-32 decoder with error detection - continuous operation"
+        "description": "CRC-32 decoder with error detection - batch processing"
       },
       "color": "#8b5cf6",
       "portPositions": {
@@ -159,45 +76,71 @@
       },
       "sizeRelation": {
         "type": "divide",
-        "factor": 1.0019986675549633,
-        "description": "÷1.0019986675549633 (CRC-32 decoder with error detection - continuous operation)"
+        "factor": 1.001998667495439,
+        "description": "÷1.00 (CRC-32 decoder with error detection - batch processing)"
       },
       "ltr": false,
       "startWithAll": true,
       "isGraph": false,
       "graphType": null,
-      "x": 360,
-      "y": 260,
-      "zIndex": 9
+      "language": "matlab",
+      "x": 280,
+      "y": 320,
+      "zIndex": 6
     },
     {
-      "id": 1771127503676,
+      "id": 1001,
       "name": "CrcEncode",
       "fileName": "crc_encode.m",
-      "code": "function crc_encode(pipeIn, pipeOut)\n% CRC_ENCODE - ITU-T CRC-32 encoder (INSTANCE-AWARE)\n\nblock_config = struct( ...\n    'name',        'CrcEncode', ...\n    'inputs',      1, ...\n    'outputs',     1, ...\n    'inputSize',   1500, ...\n    'outputSize',  1504, ...\n    'LTR',         true, ...\n    'startWithAll', true, ...\n    'socketHost',  'localhost', ...\n    'socketPort',  9001, ...\n    'polynomial',  79764919, ...\n    'description', 'CRC-32 encoder (ITU-T V.42) - continuous operation' ...\n);\n\n    config = parse_block_config(block_config);\n\n    % Get instance-specific MATLAB port from environment\n    matlabPortStr = getenv('MATLAB_PORT');\n    if ~isempty(matlabPortStr)\n        matlabPort = str2double(matlabPortStr);\n    else\n        matlabPort = config.socketPort;\n    end\n\n    % SOCKET CONNECTION (REQUIRED)\n    socketObj = matlab_socket_client(config.socketHost, matlabPort, 10);\n\n    if isempty(socketObj)\n        error('Failed to connect to socket server. Make sure Electron is running!');\n    end\n\n    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');\n\n    try\n        % Build CRC-32 lookup table\n        crcTable = build_crc32_table();\n\n        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');\n\n        frameCount = 0;\n        totalBytes = 0;\n        startTime  = tic;\n        lastTime   = 0;\n        lastBytes  = 0;\n\n        % CONTINUOUS OPERATION - Never exits\n        while true\n            % Read input (1500 bytes as int8)\n            inputData = pipeline_mex('read', pipeIn, config.inputSize);\n\n            % Calculate CRC on the int8 data by treating as uint8\n            dataAsUint8 = typecast(inputData, 'uint8');\n            crc32 = calculate_crc32(dataAsUint8, crcTable);\n\n            % Create output (1504 bytes = 1500 data + 4 CRC)\n            outputData = zeros(config.outputSize, 1, 'int8');\n            outputData(1:config.inputSize) = inputData;\n\n            % Append CRC as 4 bytes (little-endian)\n            crcBytes = typecast(uint32(crc32), 'uint8');\n            outputData(1501:1504) = typecast(crcBytes, 'int8');\n\n            pipeline_mex('write', pipeOut, outputData);\n\n            frameCount = frameCount + 1;\n            totalBytes = totalBytes + length(outputData);\n\n            currentTime = toc(startTime);\n            elapsed = currentTime - lastTime;\n            if elapsed > 0\n                instantGbps = ((totalBytes - lastBytes) * 8 / 1e9) / elapsed;\n            else\n                instantGbps = 0;\n            end\n            lastTime  = currentTime;\n            lastBytes = totalBytes;\n\n            metrics        = struct();\n            metrics.frames = frameCount;\n            metrics.gbps   = instantGbps;\n            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);\n        end\n\n    catch ME\n        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);\n        clear socketObj;\n        rethrow(ME);\n    end\nend\n\nfunction crcTable = build_crc32_table()\n    poly     = uint32(0xEDB88320);\n    crcTable = zeros(256, 1, 'uint32');\n    for i = 0:255\n        crc = uint32(i);\n        for j = 0:7\n            if bitand(crc, uint32(1))\n                crc = bitxor(bitshift(crc, -1), poly);\n            else\n                crc = bitshift(crc, -1);\n            end\n        end\n        crcTable(i + 1) = crc;\n    end\nend\n\nfunction crc = calculate_crc32(data, crcTable)\n    crc = uint32(0xFFFFFFFF);\n    for i = 1:length(data)\n        tableIdx = bitxor(bitand(crc, uint32(0xFF)), uint32(data(i))) + 1;\n        crc = bitxor(bitshift(crc, -8), crcTable(tableIdx));\n    end\n    crc = bitxor(crc, uint32(0xFFFFFFFF));\nend\n\nfunction config = parse_block_config(block_config)\n    config = block_config;\n    blockIdStr = getenv('BLOCK_ID');\n    if isempty(blockIdStr)\n        config.blockId = 0;\n    else\n        config.blockId = str2double(blockIdStr);\n    end\n    requiredFields = {'name', 'inputs', 'outputs', 'inputSize', 'outputSize'};\n    for i = 1:length(requiredFields)\n        if ~isfield(config, requiredFields{i})\n            error('Missing required field: %s', requiredFields{i});\n        end\n    end\nend",
+      "code": "function crc_encode(pipeIn, pipeOut)\n% CRC_ENCODE - ITU-T CRC-32 encoder using generic block framework\n\n    % ========== USER CONFIGURATION ==========\n    block_config = struct( ...\n        'name',              'CrcEncode', ...\n        'inputs',            1, ...\n        'outputs',           1, ...\n        'inputPacketSizes',  1500, ...\n        'inputBatchSizes',   44740, ...\n        'outputPacketSizes', 1504, ...\n        'outputBatchSizes',  44740, ...\n        'LTR',               true, ...\n        'startWithAll',      true, ...\n        'socketHost',        'localhost', ...\n        'socketPort',        9001, ...\n        'description',       'CRC-32 encoder (ITU-T V.42) - batch processing' ...\n    );\n    \n    % ========== CUSTOM INITIALIZATION ==========\n    init_fn = @(config) build_crc32_table();\n    \n    % ========== PROCESSING FUNCTION ==========\n    process_fn = @(inputBatch, actualCount, crcTable, config) ...\n        process_crc_encode(inputBatch, actualCount, crcTable, config);\n    \n    % ========== RUN GENERIC BLOCK ==========\n    run_generic_block(pipeIn, pipeOut, block_config, process_fn, init_fn);\nend\n\nfunction [outputBatch, actualOutputCount] = process_crc_encode(inputBatch, actualCount, crcTable, config)\n    INPUT_PACKET_SIZE = config.inputPacketSizes(1);\n    OUTPUT_PACKET_SIZE = config.outputPacketSizes(1);\n    OUTPUT_BATCH_SIZE = config.outputBatchSizes(1);\n    \n    % Pre-allocate output batch\n    outputBatch = zeros(OUTPUT_BATCH_SIZE * OUTPUT_PACKET_SIZE, 1, 'int8');\n    \n    % Process each packet: add CRC\n    for pktIdx = 1:actualCount\n        % Extract input packet\n        inputOffset = (pktIdx - 1) * INPUT_PACKET_SIZE;\n        inputPacket = inputBatch(inputOffset + 1 : inputOffset + INPUT_PACKET_SIZE);\n        \n        % Calculate CRC on the int8 data by treating as uint8\n        dataAsUint8 = typecast(inputPacket, 'uint8');\n        crc32 = calculate_crc32(dataAsUint8, crcTable);\n        \n        % Create output packet (data + CRC)\n        outputOffset = (pktIdx - 1) * OUTPUT_PACKET_SIZE;\n        outputBatch(outputOffset + 1 : outputOffset + INPUT_PACKET_SIZE) = inputPacket;\n        \n        % Append CRC as 4 bytes (little-endian)\n        crcBytes = typecast(uint32(crc32), 'uint8');\n        crcInt8 = typecast(crcBytes, 'int8');\n        outputBatch(outputOffset + INPUT_PACKET_SIZE + 1 : outputOffset + OUTPUT_PACKET_SIZE) = crcInt8;\n    end\n    \n    actualOutputCount = actualCount;\nend\n\nfunction crcTable = build_crc32_table()\n    poly = uint32(0xEDB88320);\n    crcTable = zeros(256, 1, 'uint32');\n    for i = 0:255\n        crc = uint32(i);\n        for j = 0:7\n            if bitand(crc, uint32(1))\n                crc = bitxor(bitshift(crc, -1), poly);\n            else\n                crc = bitshift(crc, -1);\n            end\n        end\n        crcTable(i + 1) = crc;\n    end\nend\n\nfunction crc = calculate_crc32(data, crcTable)\n    crc = uint32(0xFFFFFFFF);\n    for i = 1:length(data)\n        tableIdx = bitxor(bitand(crc, uint32(0xFF)), uint32(data(i))) + 1;\n        crc = bitxor(bitshift(crc, -8), crcTable(tableIdx));\n    end\n    crc = bitxor(crc, uint32(0xFFFFFFFF));\nend",
       "inputs": 1,
       "outputs": 1,
-      "inputSize": 1500,
-      "outputSize": 1504,
-      "inputSizes": [
+      "inputPacketSizes": [
         1500
       ],
-      "outputSizes": [
+      "inputBatchSizes": [
+        44740
+      ],
+      "outputPacketSizes": [
         1504
       ],
-      "description": "CRC-32 encoder (ITU-T V.42) - continuous operation",
+      "outputBatchSizes": [
+        44740
+      ],
+      "inputBufferSizes": [
+        67110002
+      ],
+      "outputBufferSizes": [
+        67288962
+      ],
+      "inputLengthBytes": [
+        2
+      ],
+      "outputLengthBytes": [
+        2
+      ],
+      "inputSize": 67110002,
+      "outputSize": 67288962,
+      "inputSizes": [
+        67110002
+      ],
+      "outputSizes": [
+        67288962
+      ],
+      "description": "CRC-32 encoder (ITU-T V.42) - batch processing",
       "config": {
         "name": "CrcEncode",
         "inputs": 1,
         "outputs": 1,
-        "inputSize": 1500,
-        "outputSize": 1504,
+        "inputPacketSizes": 1500,
+        "inputBatchSizes": 44740,
+        "outputPacketSizes": 1504,
+        "outputBatchSizes": 44740,
         "LTR": true,
         "startWithAll": true,
         "socketHost": "localhost",
         "socketPort": 9001,
-        "polynomial": 79764919,
-        "description": "CRC-32 encoder (ITU-T V.42) - continuous operation"
+        "description": "CRC-32 encoder (ITU-T V.42) - batch processing"
       },
       "color": "#6366f1",
       "portPositions": {
@@ -220,52 +163,211 @@
       },
       "sizeRelation": {
         "type": "multiply",
-        "factor": 1.0026666666666666,
-        "description": "×1.0026666666666666 (CRC-32 encoder (ITU-T V.42) - continuous operation)"
+        "factor": 1.002666666587195,
+        "description": "×1.00 (CRC-32 encoder (ITU-T V.42) - batch processing)"
       },
       "ltr": true,
       "startWithAll": true,
       "isGraph": false,
       "graphType": null,
-      "x": 360,
-      "y": 140,
-      "zIndex": 4
+      "language": "matlab",
+      "x": 280,
+      "y": 200,
+      "zIndex": 5
+    },
+    {
+      "id": 1006,
+      "name": "FileSource",
+      "fileName": "file_source.m",
+      "code": "function file_source(pipeOut)\n% FILE_SOURCE - Progressive file loading using generic block framework\n\n    % ========== USER CONFIGURATION ==========\n    block_config = struct( ...\n        'name',              'FileSource', ...\n        'inputs',            0, ...\n        'outputs',           1, ...\n        'outputPacketSizes', 1500, ...\n        'outputBatchSizes',  44740, ...\n        'LTR',               true, ...\n        'startWithAll',      false, ...\n        'socketHost',        'localhost', ...\n        'socketPort',        9001, ...\n        'sourceDirectory',   'C:\\Users\\amrga\\Downloads\\final\\pipeline-editor\\Test_Files', ...\n        'description',       'Progressive file loading with continuous buffering' ...\n    );\n    \n    % ========== CUSTOM INITIALIZATION ==========\n    init_fn = @(config) initialize_file_source(config);\n    \n    % ========== PROCESSING FUNCTION ==========\n    process_fn = @(inputBatch, actualCount, data, config) ...\n        process_file_source_persistent(inputBatch, actualCount, data, config);\n    \n    % ========== RUN GENERIC BLOCK ==========\n    run_generic_block([], pipeOut, block_config, process_fn, init_fn);\nend\n\nfunction customData = initialize_file_source(config)\n    % FILE PROTOCOL CONSTANTS\n    START_FLAG = uint8([0xAA, 0x55, 0xAA, 0x55]);\n    END_FLAG = uint8([0x55, 0xAA, 0x55, 0xAA]);\n    FILENAME_LENGTH = 256;\n    REPETITIONS = 10;\n    \n    if ~exist(config.sourceDirectory, 'dir')\n        mkdir(config.sourceDirectory);\n        error('Created source directory. Add files and restart.');\n    end\n    \n    fileList = dir(fullfile(config.sourceDirectory, '*.*'));\n    fileList = fileList(~[fileList.isdir]);\n    \n    if isempty(fileList)\n        error('No files found in source directory.');\n    end\n    \n    fprintf('Found %d file(s) to send\\n', length(fileList));\n    \n    customData = struct();\n    customData.fileList = fileList;\n    customData.currentFileIdx = 1;\n    customData.streamBuffer = [];\n    customData.sourceDirectory = config.sourceDirectory;\n    customData.START_FLAG = START_FLAG;\n    customData.END_FLAG = END_FLAG;\n    customData.FILENAME_LENGTH = FILENAME_LENGTH;\n    customData.REPETITIONS = REPETITIONS;\nend\n\nfunction [outputBatch, actualOutputCount] = process_file_source_persistent(~, ~, initData, config)\n    % Use persistent variable to maintain state across calls\n    persistent state;\n    \n    % First call - initialize from initData\n    if isempty(state)\n        state = initData;\n    end\n    \n    PACKET_SIZE = config.outputPacketSizes(1);\n    BATCH_SIZE = config.outputBatchSizes(1);\n    totalBatchBytes = BATCH_SIZE * PACKET_SIZE;\n    \n    % Fill buffer with files until we have enough for a batch\n    while state.currentFileIdx <= length(state.fileList) && ...\n          length(state.streamBuffer) < totalBatchBytes\n        \n        fileName = state.fileList(state.currentFileIdx).name;\n        filePath = fullfile(state.sourceDirectory, fileName);\n        \n        % Read current file\n        fid = fopen(filePath, 'rb');\n        if fid == -1\n            fprintf('WARNING: Cannot open: %s (skipping)\\n', fileName);\n            state.currentFileIdx = state.currentFileIdx + 1;\n            continue;\n        end\n        fileData = fread(fid, '*uint8');\n        fclose(fid);\n        \n        fileSize = length(fileData);\n        fprintf('Loading file %d/%d: %s (%.2f KB)\\n', ...\n                state.currentFileIdx, length(state.fileList), fileName, fileSize/1024);\n        \n        % Build file packet structure\n        fileNameBytes = uint8(zeros(state.FILENAME_LENGTH, 1));\n        nameBytes = uint8(fileName);\n        nameLen = min(length(nameBytes), state.FILENAME_LENGTH);\n        fileNameBytes(1:nameLen) = nameBytes(1:nameLen);\n        \n        fileSizeBytes = typecast(uint64(fileSize), 'uint8')';\n        \n        fileStream = [];\n        fileStream = [fileStream; state.START_FLAG(:)];\n        for rep = 1:state.REPETITIONS\n            fileStream = [fileStream; fileNameBytes];\n        end\n        for rep = 1:state.REPETITIONS\n            fileStream = [fileStream; fileSizeBytes];\n        end\n        fileStream = [fileStream; fileData];\n        fileStream = [fileStream; state.END_FLAG(:)];\n        \n        state.streamBuffer = [state.streamBuffer; fileStream];\n        \n        fprintf('  Added to buffer: %d bytes (total buffer: %.2f KB)\\n', ...\n                length(fileStream), length(state.streamBuffer)/1024);\n        \n        % *** INCREMENT FILE INDEX ***\n        state.currentFileIdx = state.currentFileIdx + 1;\n        \n        if length(state.streamBuffer) >= totalBatchBytes\n            break;\n        end\n    end\n    \n    % Check if we're done\n    if state.currentFileIdx > length(state.fileList) && isempty(state.streamBuffer)\n        fprintf('\\n========================================\\n');\n        fprintf('TRANSMISSION COMPLETE\\n');\n        fprintf('========================================\\n');\n        fprintf('Total files sent: %d\\n', length(state.fileList));\n        fprintf('========================================\\n');\n        error('MATLAB:MEX:ErrMsgTxt', 'All files transmitted');\n    end\n    \n    % Send batch from buffer\n    availableBytes = length(state.streamBuffer);\n    maxPacketsFromBuffer = ceil(availableBytes / PACKET_SIZE);\n    packetsInThisBatch = min(BATCH_SIZE, maxPacketsFromBuffer);\n    \n    if packetsInThisBatch == 0\n        outputBatch = [];\n        actualOutputCount = 0;\n        return;\n    end\n    \n    % Create batch buffer\n    outputBatch = zeros(BATCH_SIZE * PACKET_SIZE, 1, 'int8');\n    bytesToSend = min(packetsInThisBatch * PACKET_SIZE, availableBytes);\n    \n    % Extract data from buffer\n    dataToSend = state.streamBuffer(1:bytesToSend);\n    state.streamBuffer(1:bytesToSend) = [];  % Remove sent data\n    \n    % Fill batch\n    dataLen = length(dataToSend);\n    outputBatch(1:dataLen) = int8(int32(dataToSend) - 128);\n    \n    actualOutputCount = packetsInThisBatch;\n    \n    fprintf('Sending batch (%d packets, buffer remaining: %.2f KB)\\n', ...\n            packetsInThisBatch, length(state.streamBuffer)/1024);\nend",
+      "inputs": 0,
+      "outputs": 1,
+      "inputPacketSizes": [
+        0
+      ],
+      "inputBatchSizes": [
+        1
+      ],
+      "outputPacketSizes": [
+        1500
+      ],
+      "outputBatchSizes": [
+        44740
+      ],
+      "inputBufferSizes": [
+        1
+      ],
+      "outputBufferSizes": [
+        67110002
+      ],
+      "inputLengthBytes": [
+        1
+      ],
+      "outputLengthBytes": [
+        2
+      ],
+      "inputSize": 1,
+      "outputSize": 67110002,
+      "inputSizes": [
+        1
+      ],
+      "outputSizes": [
+        67110002
+      ],
+      "description": "Progressive file loading with continuous buffering",
+      "config": {
+        "name": "FileSource",
+        "inputs": 0,
+        "outputs": 1,
+        "outputPacketSizes": 1500,
+        "outputBatchSizes": 44740,
+        "LTR": true,
+        "startWithAll": false,
+        "socketHost": "localhost",
+        "socketPort": 9001,
+        "sourceDirectory": "C:\\Users\\amrga\\Downloads\\final\\pipeline-editor\\Test_Files",
+        "description": "Progressive file loading with continuous buffering"
+      },
+      "color": "#ec4899",
+      "portPositions": {
+        "inputs": [],
+        "outputs": [
+          {
+            "x": 140,
+            "y": 40,
+            "type": "output",
+            "index": 0
+          }
+        ]
+      },
+      "sizeRelation": {
+        "type": "multiply",
+        "factor": 67110002,
+        "description": "×67110002.00 (Progressive file loading with continuous buffering)"
+      },
+      "ltr": true,
+      "startWithAll": false,
+      "isGraph": false,
+      "graphType": null,
+      "language": "matlab",
+      "x": 100,
+      "y": 200,
+      "zIndex": 9
+    },
+    {
+      "id": 1007,
+      "name": "FileSink",
+      "fileName": "file_sink.m",
+      "code": "function file_sink(pipeIn)\n% FILE_SINK - On-the-fly disk writing using generic block framework\n\n    % ========== USER CONFIGURATION ==========\n    block_config = struct( ...\n        'name',             'FileSink', ...\n        'inputs',           1, ...\n        'outputs',          0, ...\n        'inputPacketSizes', 1501, ...\n        'inputBatchSizes',  44740, ...\n        'LTR',              false, ...\n        'startWithAll',     true, ...\n        'socketHost',       'localhost', ...\n        'socketPort',       9001, ...\n        'outputDirectory',  'C:\\Users\\amrga\\Downloads\\final\\pipeline-editor\\Output_Files', ...\n        'description',      'Streaming file sink with on-the-fly disk writes' ...\n    );\n    \n    % ========== CUSTOM INITIALIZATION ==========\n    init_fn = @(config) initialize_file_sink(config);\n    \n    % ========== PROCESSING FUNCTION ==========\n    process_fn = @(inputBatch, actualCount, initData, config) ...\n        process_file_sink_persistent(inputBatch, actualCount, initData, config);\n    \n    % ========== RUN GENERIC BLOCK ==========\n    run_generic_block(pipeIn, [], block_config, process_fn, init_fn);\nend\n\nfunction customData = initialize_file_sink(config)\n    % FILE PROTOCOL CONSTANTS\n    START_FLAG = uint8([0xAA, 0x55, 0xAA, 0x55]);\n    END_FLAG = uint8([0x55, 0xAA, 0x55, 0xAA]);\n    FILENAME_LENGTH = 256;\n    REPETITIONS = 10;\n    \n    if ~exist(config.outputDirectory, 'dir')\n        mkdir(config.outputDirectory);\n    end\n    \n    % Initialize error report\n    reportPath = fullfile(config.outputDirectory, 'error_report.txt');\n    fid = fopen(reportPath, 'w');\n    if fid == -1\n        error('Cannot create error report file: %s', reportPath);\n    end\n    fprintf(fid, '========================================\\n');\n    fprintf(fid, 'FILE TRANSMISSION ERROR REPORT\\n');\n    fprintf(fid, '========================================\\n');\n    fprintf(fid, 'Started: %s\\n', datestr(now));\n    fprintf(fid, 'Mode: STREAMING (on-the-fly writes)\\n\\n');\n    fprintf(fid, 'FILES RECEIVED:\\n');\n    fprintf(fid, '========================================\\n\\n');\n    fclose(fid);\n    \n    customData = struct();\n    customData.streamBuffer = [];\n    customData.currentFile = struct('active', false, 'fid', -1);\n    customData.filesReceived = 0;\n    customData.totalErrorCount = 0;\n    customData.outputDirectory = config.outputDirectory;\n    customData.reportPath = reportPath;\n    customData.START_FLAG = START_FLAG;\n    customData.END_FLAG = END_FLAG;\n    customData.FILENAME_LENGTH = FILENAME_LENGTH;\n    customData.REPETITIONS = REPETITIONS;\n    customData.lastProgressPercent = -1;\n    \n    fprintf('Output directory: %s\\n', config.outputDirectory);\n    fprintf('Error report:     %s\\n', reportPath);\n    fprintf('Streaming mode active - writing to disk on-the-fly...\\n\\n');\nend\n\nfunction [outputBatch, actualOutputCount] = process_file_sink_persistent(inputBatch, actualCount, initData, config)\n    % Use persistent variable to maintain state\n    persistent state;\n    \n    % First call - initialize from initData\n    if isempty(state)\n        state = initData;\n    end\n    \n    PACKET_SIZE = config.inputPacketSizes(1);\n    DATA_SIZE = PACKET_SIZE - 1;  % Last byte is error flag\n    \n    % ===== OPTIMIZED: Process entire batch at once =====\n    if actualCount == 0\n        % EOF signal received\n        fprintf('Received EOF signal (0 packets)\\n');\n        \n        % Close any open file\n        if state.currentFile.active && state.currentFile.fid ~= -1\n            fclose(state.currentFile.fid);\n            if exist(state.currentFile.tempPath, 'file')\n                movefile(state.currentFile.tempPath, state.currentFile.finalPath);\n            end\n            fprintf('Completed: %s\\n', state.currentFile.name);\n            state.filesReceived = state.filesReceived + 1;\n            state.currentFile.active = false;\n        end\n        \n        fprintf('\\n========================================\\n');\n        fprintf('ALL FILES RECEIVED\\n');\n        fprintf('========================================\\n');\n        fprintf('Total files: %d\\n', state.filesReceived);\n        fprintf('========================================\\n');\n        \n        outputBatch = [];\n        actualOutputCount = 0;\n        return;\n    end\n    \n    % Extract all data from batch at once (MUCH FASTER)\n    batchData = inputBatch(1 : actualCount * PACKET_SIZE);\n    \n    % Vectorized extraction: reshape to separate packets\n    batchMatrix = reshape(batchData, PACKET_SIZE, actualCount);\n    dataMatrix = batchMatrix(1:DATA_SIZE, :);  % All data bytes\n    errorFlags = batchMatrix(PACKET_SIZE, :);   % All error flags\n    \n    % Convert to uint8 and flatten\n    newData = uint8(int32(dataMatrix(:)) + 128);\n    \n    % Track errors\n    state.totalErrorCount = state.totalErrorCount + sum(errorFlags ~= 0);\n    \n    % Add new data to stream buffer\n    state.streamBuffer = [state.streamBuffer; newData];\n    \n    % Process stream buffer for file boundaries\n    while true\n        if ~state.currentFile.active\n            % Look for START flag\n            startPos = find_pattern(state.streamBuffer, state.START_FLAG);\n            \n            if isempty(startPos)\n                if length(state.streamBuffer) > 4096\n                    state.streamBuffer = state.streamBuffer(end-4095:end);\n                end\n                break;\n            end\n            \n            % Parse metadata\n            metadataSize = 4 + (state.FILENAME_LENGTH * state.REPETITIONS) + (8 * state.REPETITIONS);\n            \n            if length(state.streamBuffer) < startPos + metadataSize - 1\n                break;\n            end\n            \n            % Extract filename (majority vote)\n            nameStart = startPos + 4;\n            fileNames = cell(state.REPETITIONS, 1);\n            for i = 1:state.REPETITIONS\n                nameBytes = state.streamBuffer(nameStart + (i-1)*state.FILENAME_LENGTH : nameStart + i*state.FILENAME_LENGTH - 1);\n                nullPos = find(nameBytes == 0, 1);\n                if ~isempty(nullPos)\n                    nameBytes = nameBytes(1:nullPos-1);\n                end\n                fileNames{i} = char(nameBytes');\n            end\n            fileName = majority_vote_string(fileNames);\n            \n            % Extract file size (mode)\n            sizeStart = nameStart + (state.FILENAME_LENGTH * state.REPETITIONS);\n            fileSizes = zeros(state.REPETITIONS, 1);\n            for i = 1:state.REPETITIONS\n                sizeBytes = state.streamBuffer(sizeStart + (i-1)*8 : sizeStart + i*8 - 1);\n                fileSizes(i) = typecast(uint8(sizeBytes), 'uint64');\n            end\n            fileSize = mode(fileSizes);\n            \n            % Create safe file paths\n            safeFileName = regexprep(fileName, '[\\\\/:*?\"<>|]', '_');  % Remove invalid chars\n            tempPath = fullfile(state.outputDirectory, [safeFileName '.part']);\n            finalPath = fullfile(state.outputDirectory, safeFileName);\n            \n            % Open file for writing\n            fid = fopen(tempPath, 'wb');\n            if fid == -1\n                error('Cannot create file: %s', tempPath);\n            end\n            \n            fprintf('Started streaming: %s (%.2f MB)\\n', fileName, fileSize/1e6);\n            \n            % Initialize current file state\n            state.currentFile.active = true;\n            state.currentFile.fid = fid;\n            state.currentFile.name = fileName;\n            state.currentFile.tempPath = tempPath;\n            state.currentFile.finalPath = finalPath;\n            state.currentFile.expectedSize = fileSize;\n            state.currentFile.writtenBytes = 0;\n            state.currentFile.errorCount = 0;\n            state.currentFile.startTime = tic;\n            state.lastProgressPercent = -1;\n            \n            % Remove metadata from buffer\n            dataStart = startPos + metadataSize;\n            state.streamBuffer = state.streamBuffer(dataStart:end);\n            \n        else\n            % Write data to file\n            remainingBytes = state.currentFile.expectedSize - state.currentFile.writtenBytes;\n            \n            if remainingBytes <= 0\n                % File complete - look for END flag\n                if length(state.streamBuffer) >= 4\n                    endFlag = state.streamBuffer(1:4);\n                    if isequal(endFlag, state.END_FLAG')\n                        state.streamBuffer = state.streamBuffer(5:end);\n                        \n                        % Close and finalize file\n                        fclose(state.currentFile.fid);\n                        movefile(state.currentFile.tempPath, state.currentFile.finalPath);\n                        \n                        writeTime = toc(state.currentFile.startTime);\n                        throughput = (state.currentFile.expectedSize / 1e6) / writeTime;\n                        \n                        fprintf('Completed: %s (%.2f MB in %.2fs = %.2f MB/s)', ...\n                                state.currentFile.name, state.currentFile.expectedSize/1e6, ...\n                                writeTime, throughput);\n                        \n                        if state.currentFile.errorCount > 0\n                            errorRate = 100.0 * state.currentFile.errorCount / state.currentFile.expectedSize;\n                            fprintf(' - ⚠ %d errors (%.4f%%)\\n', state.currentFile.errorCount, errorRate);\n                        else\n                            fprintf(' - ✓ Clean\\n');\n                        end\n                        \n                        % Update error report\n                        append_file_to_report(state.reportPath, state.currentFile);\n                        \n                        state.filesReceived = state.filesReceived + 1;\n                        state.currentFile.active = false;\n                        state.currentFile.fid = -1;\n                        \n                    else\n                        fprintf('WARNING: END flag mismatch for %s\\n', state.currentFile.name);\n                        fclose(state.currentFile.fid);\n                        state.currentFile.active = false;\n                        state.streamBuffer = state.streamBuffer(5:end);\n                    end\n                else\n                    break;\n                end\n            else\n                % Write available data\n                bytesToWrite = min(remainingBytes, length(state.streamBuffer));\n                \n                if bytesToWrite > 0\n                    dataToWrite = state.streamBuffer(1:bytesToWrite);\n                    fwrite(state.currentFile.fid, dataToWrite, 'uint8');\n                    state.currentFile.writtenBytes = state.currentFile.writtenBytes + bytesToWrite;\n                    state.streamBuffer = state.streamBuffer(bytesToWrite + 1 : end);\n                    \n                    % Show progress only at 10% intervals\n                    progress = floor(100.0 * state.currentFile.writtenBytes / state.currentFile.expectedSize);\n                    if mod(progress, 10) == 0 && progress ~= state.lastProgressPercent\n                        fprintf('  Progress: %s - %d%% (%.2f MB / %.2f MB)\\n', ...\n                                state.currentFile.name, progress, ...\n                                state.currentFile.writtenBytes/1e6, state.currentFile.expectedSize/1e6);\n                        state.lastProgressPercent = progress;\n                    end\n                else\n                    break;\n                end\n            end\n        end\n    end\n    \n    outputBatch = [];\n    actualOutputCount = 0;\nend\n\nfunction pos = find_pattern(data, pattern)\n    pos = [];\n    if length(data) < length(pattern)\n        return;\n    end\n    \n    for i = 1:length(data) - length(pattern) + 1\n        if isequal(data(i:i+length(pattern)-1), pattern')\n            pos = i;\n            return;\n        end\n    end\nend\n\nfunction result = majority_vote_string(strings)\n    if isempty(strings)\n        result = '';\n        return;\n    end\n    \n    [uniqueStrings, ~, idx] = unique(strings);\n    counts = histc(idx, 1:length(uniqueStrings));\n    [~, maxIdx] = max(counts);\n    result = uniqueStrings{maxIdx};\nend\n\nfunction append_file_to_report(filepath, fileInfo)\n    fid = fopen(filepath, 'a');\n    if fid == -1\n        return;\n    end\n    \n    fprintf(fid, '[%s]\\n', datestr(now));\n    fprintf(fid, 'File: %s\\n', fileInfo.name);\n    fprintf(fid, '  Size:         %d bytes (%.2f MB)\\n', fileInfo.expectedSize, fileInfo.expectedSize/1e6);\n    fprintf(fid, '  Errors:       %d\\n', fileInfo.errorCount);\n    if fileInfo.errorCount > 0\n        errorRate = 100.0 * fileInfo.errorCount / fileInfo.expectedSize;\n        fprintf(fid, '  Error Rate:   %.4f%%\\n', errorRate);\n        fprintf(fid, '  Status:       CORRUPTED ⚠\\n');\n    else\n        fprintf(fid, '  Status:       CLEAN ✓\\n');\n    end\n    fprintf(fid, '\\n');\n    \n    fclose(fid);\nend",
+      "inputs": 1,
+      "outputs": 0,
+      "inputPacketSizes": [
+        1501
+      ],
+      "inputBatchSizes": [
+        44740
+      ],
+      "outputPacketSizes": [
+        0
+      ],
+      "outputBatchSizes": [
+        1
+      ],
+      "inputBufferSizes": [
+        67154742
+      ],
+      "outputBufferSizes": [
+        1
+      ],
+      "inputLengthBytes": [
+        2
+      ],
+      "outputLengthBytes": [
+        1
+      ],
+      "inputSize": 67154742,
+      "outputSize": 1,
+      "inputSizes": [
+        67154742
+      ],
+      "outputSizes": [
+        1
+      ],
+      "description": "Streaming file sink with on-the-fly disk writes",
+      "config": {
+        "name": "FileSink",
+        "inputs": 1,
+        "outputs": 0,
+        "inputPacketSizes": 1501,
+        "inputBatchSizes": 44740,
+        "LTR": false,
+        "startWithAll": true,
+        "socketHost": "localhost",
+        "socketPort": 9001,
+        "outputDirectory": "C:\\Users\\amrga\\Downloads\\final\\pipeline-editor\\Output_Files",
+        "description": "Streaming file sink with on-the-fly disk writes"
+      },
+      "color": "#ec4899",
+      "portPositions": {
+        "inputs": [
+          {
+            "x": 140,
+            "y": 40,
+            "type": "input",
+            "index": 0
+          }
+        ],
+        "outputs": []
+      },
+      "sizeRelation": {
+        "type": "divide",
+        "factor": 67154742,
+        "description": "÷67154742.00 (Streaming file sink with on-the-fly disk writes)"
+      },
+      "ltr": false,
+      "startWithAll": true,
+      "isGraph": false,
+      "graphType": null,
+      "language": "matlab",
+      "x": 100,
+      "y": 320,
+      "zIndex": 7
     }
   ],
   "connections": [
     {
-      "id": 1771127522098,
-      "fromBlock": 1771127503458,
+      "id": 1771210440643,
+      "fromBlock": 1001,
       "fromPort": 0,
-      "toBlock": 1771127503676,
-      "toPort": 0,
-      "waypoints": []
-    },
-    {
-      "id": 1771127523819,
-      "fromBlock": 1771127503567,
-      "fromPort": 0,
-      "toBlock": 1771127503349,
-      "toPort": 0,
-      "waypoints": []
-    },
-    {
-      "id": 1771127528352,
-      "fromBlock": 1771127503676,
-      "fromPort": 0,
-      "toBlock": 1771127503567,
+      "toBlock": 1000,
       "toPort": 0,
       "waypoints": [
         {
-          "x": 540,
-          "y": 180
+          "x": 460,
+          "y": 240
         },
         {
-          "x": 540,
-          "y": 300
+          "x": 460,
+          "y": 360
         }
       ]
+    },
+    {
+      "id": 1771210811435,
+      "fromBlock": 1006,
+      "fromPort": 0,
+      "toBlock": 1001,
+      "toPort": 0,
+      "waypoints": []
+    },
+    {
+      "id": 1771210813161,
+      "fromBlock": 1000,
+      "fromPort": 0,
+      "toBlock": 1007,
+      "toPort": 0,
+      "waypoints": []
     }
   ],
-  "timestamp": "2026-02-15T03:52:09.448Z"
+  "timestamp": "2026-02-16T03:02:19.918Z"
 }

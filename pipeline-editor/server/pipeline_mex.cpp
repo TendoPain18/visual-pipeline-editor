@@ -1,8 +1,9 @@
 #include "mex.h"
 #include <windows.h>
 #include <string.h>
+#include <stdlib.h>
 
-// OPTIMIZED VERSION - Reduce overhead
+// PRODUCTION VERSION - Instance-aware pipe names
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     if (nrhs < 2) {
@@ -12,8 +13,19 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     char cmd[16];
     mxGetString(prhs[0], cmd, sizeof(cmd));
     
-    char pipeName[128];
-    mxGetString(prhs[1], pipeName, sizeof(pipeName));
+    char shortPipeName[128];
+    mxGetString(prhs[1], shortPipeName, sizeof(shortPipeName));
+    
+    // ===== BUILD FULL PIPE NAME WITH INSTANCE ID =====
+    char pipeName[256];
+    char* instanceId = getenv("INSTANCE_ID");
+    
+    if (instanceId && strlen(instanceId) > 0) {
+        sprintf(pipeName, "Instance_%s_%s", instanceId, shortPipeName);
+    } else {
+        strcpy(pipeName, shortPipeName);
+    }
+    // =================================================
     
     // Create event names
     char readyName[256], emptyName[256];
@@ -31,7 +43,6 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
             mexErrMsgTxt("Data must be int8");
         }
         
-        // Use MATLAB's type: int8_T instead of int8_t
         int8_T* data = (int8_T*)mxGetData(dataArray);
         size_t dataSize = mxGetNumberOfElements(dataArray);
         
@@ -39,11 +50,11 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         HANDLE hMapFile = OpenFileMappingA(FILE_MAP_WRITE, FALSE, pipeName);
         if (!hMapFile) {
             char err[256];
-            sprintf(err, "Failed to open %s (Error: %d)", pipeName, GetLastError());
+            sprintf(err, "Failed to open %s (Error: %lu)", pipeName, GetLastError());
             mexErrMsgTxt(err);
         }
         
-        // Map view - CRITICAL: Use FILE_MAP_WRITE for better performance
+        // Map view
         void* pBuf = MapViewOfFile(hMapFile, FILE_MAP_WRITE, 0, 0, dataSize);
         if (!pBuf) {
             CloseHandle(hMapFile);
@@ -70,7 +81,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
             mexErrMsgTxt("Wait failed");
         }
         
-        // OPTIMIZED: Direct memory copy (no intermediate buffer)
+        // Copy data
         memcpy(pBuf, data, dataSize);
         
         // Signal ready
@@ -94,11 +105,11 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         HANDLE hMapFile = OpenFileMappingA(FILE_MAP_READ, FALSE, pipeName);
         if (!hMapFile) {
             char err[256];
-            sprintf(err, "Failed to open %s (Error: %d)", pipeName, GetLastError());
+            sprintf(err, "Failed to open %s (Error: %lu)", pipeName, GetLastError());
             mexErrMsgTxt(err);
         }
         
-        // Map view - CRITICAL: Use FILE_MAP_READ for better performance
+        // Map view
         void* pBuf = MapViewOfFile(hMapFile, FILE_MAP_READ, 0, 0, readSize);
         if (!pBuf) {
             CloseHandle(hMapFile);
@@ -129,7 +140,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         plhs[0] = mxCreateNumericMatrix(readSize, 1, mxINT8_CLASS, mxREAL);
         int8_T* outData = (int8_T*)mxGetData(plhs[0]);
         
-        // OPTIMIZED: Direct memory copy
+        // Copy data
         memcpy(outData, pBuf, readSize);
         
         // Signal empty

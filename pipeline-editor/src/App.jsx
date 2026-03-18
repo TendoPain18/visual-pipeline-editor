@@ -12,6 +12,7 @@ import { useFileOperations } from './hooks/useFileOperations';
 import { useServerOperations } from './hooks/useServerOperations';
 import { useCanvasHandlers } from './hooks/useCanvasHandlers';
 import { GRID_SIZE, parseMatlabBlock, calculatePortPositions, BLOCK_WIDTH, BLOCK_HEIGHT } from './utils/blockUtils';
+import { parseCppBlock } from './utils/cppBlockUtils';
 
 const PipelineEditor = () => {
   const [sidebarMode, setSidebarMode] = useState(null);
@@ -30,6 +31,7 @@ const PipelineEditor = () => {
   const canvasRef = useRef(null);
   const serverMessageListenerRef = useRef(null);
   const socketStatusListenerRef = useRef(null);
+  const blockMessageListenerRef = useRef(null);
 
   const addLog = (type, message) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -173,6 +175,7 @@ const PipelineEditor = () => {
       addLog('info', `Instance ID: ${config.instanceId}`);
       addLog('info', `Server Port: ${config.serverPort}`);
       addLog('info', `MATLAB Port: ${config.matlabPort}`);
+      addLog('info', `C++ Port:    ${config.cppPort}`);
       
       const dir = await window.electronAPI.getAppPath();
       setProjectDir(dir);
@@ -266,21 +269,25 @@ const PipelineEditor = () => {
     };
   }, []);
 
-  // Listen to MATLAB block messages via socket
+  // Listen to block messages (MATLAB/C++/Python) via language-specific socket servers
   useEffect(() => {
-    const listener = window.electronAPI.onMatlabMessage((message) => {
-      console.log('MATLAB socket message:', message);
+    if (blockMessageListenerRef.current) {
+      blockMessageListenerRef.current();
+    }
+    
+    blockMessageListenerRef.current = window.electronAPI.onBlockMessage((message) => {
+      console.log(`[${message.language}] Socket message:`, message);
       
-      const { protocol, blockId, blockName, type, data, timestamp } = message;
+      const { protocol, blockId, blockName, type, data, timestamp, language } = message;
       
       switch (type) {
         case 'BLOCK_INIT':
-          addLog('info', `[${blockName}] Initializing...`);
+          addLog('info', `[${blockName}] [${language}] Initializing...`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'initializing' }));
           break;
           
         case 'BLOCK_READY':
-          addLog('success', `[${blockName}] Ready`);
+          addLog('success', `[${blockName}] [${language}] Ready`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'ready' }));
           setBlockProcesses(prev => {
             const blockEntry = Object.entries(prev).find(([key, proc]) => 
@@ -290,7 +297,7 @@ const PipelineEditor = () => {
               const [key, proc] = blockEntry;
               return {
                 ...prev,
-                [key]: { ...proc, status: 'running' }
+                [key]: { ...proc, status: 'running', language }
               };
             }
             return prev;
@@ -334,17 +341,17 @@ const PipelineEditor = () => {
           break;
           
         case 'BLOCK_ERROR':
-          addLog('error', `[${blockName}] ${data.error || data.status || 'Error'}`);
+          addLog('error', `[${blockName}] [${language}] ${data.error || data.status || 'Error'}`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'error' }));
           break;
           
         case 'BLOCK_STOPPING':
-          addLog('info', `[${blockName}] Stopping...`);
+          addLog('info', `[${blockName}] [${language}] Stopping...`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'stopping' }));
           break;
           
         case 'BLOCK_STOPPED':
-          addLog('info', `[${blockName}] Stopped`);
+          addLog('info', `[${blockName}] [${language}] Stopped`);
           setBlockStatus(prev => {
             const newStatus = { ...prev };
             delete newStatus[blockId];
@@ -354,7 +361,11 @@ const PipelineEditor = () => {
       }
     });
     
-    return () => listener();
+    return () => {
+      if (blockMessageListenerRef.current) {
+        blockMessageListenerRef.current();
+      }
+    };
   }, []);
 
   // Update graph windows when graph data changes
@@ -454,8 +465,15 @@ const PipelineEditor = () => {
     const block = selectedBlocks[0];
     
     try {
-      // RE-PARSE the block with updated code
-      const reparsedData = parseMatlabBlock(updatedCode, block.fileName);
+      // RE-PARSE the block with updated code based on language
+      let reparsedData;
+      if (block.language === 'matlab') {
+        reparsedData = parseMatlabBlock(updatedCode, block.fileName);
+      } else if (block.language === 'cpp') {
+        reparsedData = parseCppBlock(updatedCode, block.fileName);
+      } else {
+        throw new Error(`Unsupported language: ${block.language}`);
+      }
       
       // Calculate new port positions
       const newPortPositions = calculatePortPositions(
@@ -476,7 +494,7 @@ const PipelineEditor = () => {
         outputs: reparsedData.outputs,
         config: reparsedData.config,
         
-        // BATCH PROCESSING FIELDS (NEW)
+        // BATCH PROCESSING FIELDS
         inputPacketSizes: reparsedData.inputPacketSizes,
         inputBatchSizes: reparsedData.inputBatchSizes,
         outputPacketSizes: reparsedData.outputPacketSizes,
@@ -486,7 +504,7 @@ const PipelineEditor = () => {
         inputLengthBytes: reparsedData.inputLengthBytes,
         outputLengthBytes: reparsedData.outputLengthBytes,
         
-        // Legacy fields (for backward compatibility)
+        // Legacy fields
         sizeRelation: reparsedData.sizeRelation,
         inputSize: reparsedData.inputSize,
         outputSize: reparsedData.outputSize,
@@ -498,7 +516,8 @@ const PipelineEditor = () => {
         startWithAll: reparsedData.startWithAll,
         isGraph: reparsedData.isGraph,
         graphType: reparsedData.graphType,
-        description: reparsedData.description
+        description: reparsedData.description,
+        language: reparsedData.language || block.language
       };
       
       // Check if any connections need to be removed due to port changes
@@ -527,7 +546,7 @@ const PipelineEditor = () => {
       setIsEditingCode(false);
     } catch (error) {
       addLog('error', `Failed to parse updated code: ${error.message}`);
-      alert(`Error updating block:\n${error.message}\n\nPlease check your block_config section.`);
+      alert(`Error updating block:\n${error.message}\n\nPlease check your block configuration.`);
     }
   };
 

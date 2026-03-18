@@ -1,0 +1,369 @@
+{
+  "version": "2.0",
+  "blocks": [
+    {
+      "id": 1000,
+      "name": "FileSink",
+      "fileName": "file_sink.cpp",
+      "code": "#include \"core/run_generic_block.h\"\r\n#include <vector>\r\n#include <string>\r\n#include <fstream>\r\n#include <filesystem>\r\n#include <algorithm>\r\n#include <map>\r\n\r\nnamespace fs = std::filesystem;\r\n\r\n// File protocol constants\r\nconst uint8_t START_FLAG[] = {0xAA, 0x55, 0xAA, 0x55};\r\nconst uint8_t END_FLAG[] = {0x55, 0xAA, 0x55, 0xAA};\r\nconst int FILENAME_LENGTH = 256;\r\nconst int REPETITIONS = 10;\r\n\r\nstruct FileInfo {\r\n    std::string name;\r\n    std::string tempPath;\r\n    std::string finalPath;\r\n    uint64_t expectedSize;\r\n    uint64_t writtenBytes;\r\n    int errorCount;\r\n    std::ofstream file;\r\n    bool active;\r\n};\r\n\r\nstruct FileSinkData {\r\n    std::vector<uint8_t> streamBuffer;\r\n    FileInfo currentFile;\r\n    int filesReceived;\r\n    int totalErrorCount;\r\n    std::string outputDirectory;\r\n    std::ofstream reportFile;\r\n};\r\n\r\n// Helper: Find pattern in buffer\r\nint find_pattern(const std::vector<uint8_t>& data, const uint8_t* pattern, int patternLen) {\r\n    for (size_t i = 0; i <= data.size() - patternLen; i++) {\r\n        if (memcmp(&data[i], pattern, patternLen) == 0) {\r\n            return i;\r\n        }\r\n    }\r\n    return -1;\r\n}\r\n\r\n// Helper: Majority vote for string\r\nstd::string majority_vote_string(const std::vector<std::string>& strings) {\r\n    if (strings.empty()) return \"\";\r\n    \r\n    std::map<std::string, int> counts;\r\n    for (const auto& s : strings) {\r\n        counts[s]++;\r\n    }\r\n    \r\n    int maxCount = 0;\r\n    std::string result;\r\n    for (const auto& pair : counts) {\r\n        if (pair.second > maxCount) {\r\n            maxCount = pair.second;\r\n            result = pair.first;\r\n        }\r\n    }\r\n    return result;\r\n}\r\n\r\nFileSinkData init_file_sink(const BlockConfig& config) {\r\n    FileSinkData data;\r\n    data.outputDirectory = \"Output_Files\";\r\n    data.filesReceived = 0;\r\n    data.totalErrorCount = 0;\r\n    data.currentFile.active = false;\r\n    \r\n    // Create output directory\r\n    if (!fs::exists(data.outputDirectory)) {\r\n        fs::create_directories(data.outputDirectory);\r\n    }\r\n    \r\n    // Create error report\r\n    std::string reportPath = data.outputDirectory + \"/error_report.txt\";\r\n    data.reportFile.open(reportPath, std::ios::out);\r\n    data.reportFile << \"========================================\\n\";\r\n    data.reportFile << \"FILE TRANSMISSION ERROR REPORT\\n\";\r\n    data.reportFile << \"========================================\\n\";\r\n    data.reportFile << \"Started: \" << __DATE__ << \" \" << __TIME__ << \"\\n\";\r\n    data.reportFile << \"Mode: STREAMING (on-the-fly writes)\\n\\n\";\r\n    data.reportFile << \"FILES RECEIVED:\\n\";\r\n    data.reportFile << \"========================================\\n\\n\";\r\n    data.reportFile.flush();\r\n    \r\n    printf(\"Output directory: %s\\n\", data.outputDirectory.c_str());\r\n    printf(\"Error report:     %s\\n\", reportPath.c_str());\r\n    printf(\"Streaming mode active - writing to disk on-the-fly...\\n\\n\");\r\n    \r\n    return data;\r\n}\r\n\r\nvoid process_file_sink(int8_t* inputBatch, int actualCount, int8_t* outputBatch,\r\n                      int& actualOutputCount, FileSinkData& customData, const BlockConfig& config) {\r\n    \r\n    int packetSize = config.inputPacketSizes[0];\r\n    int dataSize = packetSize - 1;  // Last byte is error flag\r\n    \r\n    // Handle EOF signal\r\n    if (actualCount == 0) {\r\n        printf(\"Received EOF signal (0 packets)\\n\");\r\n        \r\n        if (customData.currentFile.active && customData.currentFile.file.is_open()) {\r\n            customData.currentFile.file.close();\r\n            if (fs::exists(customData.currentFile.tempPath)) {\r\n                fs::rename(customData.currentFile.tempPath, customData.currentFile.finalPath);\r\n            }\r\n            printf(\"Completed: %s\\n\", customData.currentFile.name.c_str());\r\n            customData.filesReceived++;\r\n            customData.currentFile.active = false;\r\n        }\r\n        \r\n        printf(\"\\n========================================\\n\");\r\n        printf(\"ALL FILES RECEIVED\\n\");\r\n        printf(\"========================================\\n\");\r\n        printf(\"Total files: %d\\n\", customData.filesReceived);\r\n        printf(\"========================================\\n\");\r\n        \r\n        actualOutputCount = 0;\r\n        return;\r\n    }\r\n    \r\n    // Extract data from batch\r\n    std::vector<uint8_t> newData;\r\n    for (int i = 0; i < actualCount; i++) {\r\n        int offset = i * packetSize;\r\n        for (int j = 0; j < dataSize; j++) {\r\n            newData.push_back((uint8_t)((int32_t)inputBatch[offset + j] + 128));\r\n        }\r\n        \r\n        // Track errors\r\n        if (inputBatch[offset + packetSize - 1] != 0) {\r\n            customData.totalErrorCount++;\r\n        }\r\n    }\r\n    \r\n    // Add to stream buffer\r\n    customData.streamBuffer.insert(customData.streamBuffer.end(), newData.begin(), newData.end());\r\n    \r\n    // Process stream buffer\r\n    while (true) {\r\n        if (!customData.currentFile.active) {\r\n            // Look for START flag\r\n            int startPos = find_pattern(customData.streamBuffer, START_FLAG, 4);\r\n            \r\n            if (startPos < 0) {\r\n                if (customData.streamBuffer.size() > 4096) {\r\n                    customData.streamBuffer.erase(customData.streamBuffer.begin(), \r\n                                                  customData.streamBuffer.end() - 4095);\r\n                }\r\n                break;\r\n            }\r\n            \r\n            // Parse metadata\r\n            int metadataSize = 4 + (FILENAME_LENGTH * REPETITIONS) + (8 * REPETITIONS);\r\n            \r\n            if (customData.streamBuffer.size() < startPos + metadataSize) {\r\n                break;\r\n            }\r\n            \r\n            // Extract filename (majority vote)\r\n            std::vector<std::string> fileNames;\r\n            int nameStart = startPos + 4;\r\n            for (int i = 0; i < REPETITIONS; i++) {\r\n                std::vector<uint8_t> nameBytes(FILENAME_LENGTH);\r\n                memcpy(nameBytes.data(), &customData.streamBuffer[nameStart + i * FILENAME_LENGTH], FILENAME_LENGTH);\r\n                \r\n                // Find null terminator\r\n                auto nullPos = std::find(nameBytes.begin(), nameBytes.end(), 0);\r\n                if (nullPos != nameBytes.end()) {\r\n                    nameBytes.erase(nullPos, nameBytes.end());\r\n                }\r\n                \r\n                fileNames.push_back(std::string(nameBytes.begin(), nameBytes.end()));\r\n            }\r\n            std::string fileName = majority_vote_string(fileNames);\r\n            \r\n            // Extract file size (mode)\r\n            std::vector<uint64_t> fileSizes;\r\n            int sizeStart = nameStart + (FILENAME_LENGTH * REPETITIONS);\r\n            for (int i = 0; i < REPETITIONS; i++) {\r\n                uint64_t size;\r\n                memcpy(&size, &customData.streamBuffer[sizeStart + i * 8], 8);\r\n                fileSizes.push_back(size);\r\n            }\r\n            \r\n            // Find mode (most common value)\r\n            std::map<uint64_t, int> sizeCounts;\r\n            for (uint64_t size : fileSizes) sizeCounts[size]++;\r\n            uint64_t fileSize = 0;\r\n            int maxCount = 0;\r\n            for (const auto& pair : sizeCounts) {\r\n                if (pair.second > maxCount) {\r\n                    maxCount = pair.second;\r\n                    fileSize = pair.first;\r\n                }\r\n            }\r\n            \r\n            // Create file paths\r\n            std::string safeFileName = fileName;\r\n            // Remove invalid characters\r\n            std::replace_if(safeFileName.begin(), safeFileName.end(), \r\n                          [](char c) { return c == '\\\\' || c == '/' || c == ':' || \r\n                                             c == '*' || c == '?' || c == '\"' || \r\n                                             c == '<' || c == '>' || c == '|'; }, '_');\r\n            \r\n            std::string tempPath = customData.outputDirectory + \"/\" + safeFileName + \".part\";\r\n            std::string finalPath = customData.outputDirectory + \"/\" + safeFileName;\r\n            \r\n            // Open file\r\n            customData.currentFile.file.open(tempPath, std::ios::binary);\r\n            if (!customData.currentFile.file) {\r\n                fprintf(stderr, \"Cannot create file: %s\\n\", tempPath.c_str());\r\n                break;\r\n            }\r\n            \r\n            printf(\"Started streaming: %s (%.2f MB)\\n\", fileName.c_str(), fileSize / 1e6);\r\n            \r\n            customData.currentFile.active = true;\r\n            customData.currentFile.name = fileName;\r\n            customData.currentFile.tempPath = tempPath;\r\n            customData.currentFile.finalPath = finalPath;\r\n            customData.currentFile.expectedSize = fileSize;\r\n            customData.currentFile.writtenBytes = 0;\r\n            customData.currentFile.errorCount = 0;\r\n            \r\n            // Remove metadata from buffer\r\n            int dataStart = startPos + metadataSize;\r\n            customData.streamBuffer.erase(customData.streamBuffer.begin(), \r\n                                         customData.streamBuffer.begin() + dataStart);\r\n            \r\n        } else {\r\n            // Write data to file\r\n            uint64_t remainingBytes = customData.currentFile.expectedSize - \r\n                                     customData.currentFile.writtenBytes;\r\n            \r\n            if (remainingBytes <= 0) {\r\n                // File complete - look for END flag\r\n                if (customData.streamBuffer.size() >= 4) {\r\n                    bool endFlagMatch = memcmp(customData.streamBuffer.data(), END_FLAG, 4) == 0;\r\n                    \r\n                    if (endFlagMatch) {\r\n                        customData.streamBuffer.erase(customData.streamBuffer.begin(), \r\n                                                     customData.streamBuffer.begin() + 4);\r\n                        \r\n                        customData.currentFile.file.close();\r\n                        fs::rename(customData.currentFile.tempPath, customData.currentFile.finalPath);\r\n                        \r\n                        printf(\"Completed: %s (%.2f MB)\", customData.currentFile.name.c_str(), \r\n                               customData.currentFile.expectedSize / 1e6);\r\n                        \r\n                        if (customData.currentFile.errorCount > 0) {\r\n                            double errorRate = 100.0 * customData.currentFile.errorCount / \r\n                                             customData.currentFile.expectedSize;\r\n                            printf(\" - ⚠ %d errors (%.4f%%)\\n\", \r\n                                   customData.currentFile.errorCount, errorRate);\r\n                        } else {\r\n                            printf(\" - ✓ Clean\\n\");\r\n                        }\r\n                        \r\n                        customData.filesReceived++;\r\n                        customData.currentFile.active = false;\r\n                    } else {\r\n                        fprintf(stderr, \"WARNING: END flag mismatch for %s\\n\", \r\n                               customData.currentFile.name.c_str());\r\n                        customData.currentFile.file.close();\r\n                        customData.currentFile.active = false;\r\n                        customData.streamBuffer.erase(customData.streamBuffer.begin(), \r\n                                                     customData.streamBuffer.begin() + 4);\r\n                    }\r\n                } else {\r\n                    break;\r\n                }\r\n            } else {\r\n                // Write available data\r\n                int bytesToWrite = std::min((uint64_t)customData.streamBuffer.size(), remainingBytes);\r\n                \r\n                if (bytesToWrite > 0) {\r\n                    customData.currentFile.file.write((char*)customData.streamBuffer.data(), bytesToWrite);\r\n                    customData.currentFile.writtenBytes += bytesToWrite;\r\n                    customData.streamBuffer.erase(customData.streamBuffer.begin(), \r\n                                                 customData.streamBuffer.begin() + bytesToWrite);\r\n                    \r\n                    // Show progress at 10% intervals\r\n                    int progress = (int)(100.0 * customData.currentFile.writtenBytes / \r\n                                        customData.currentFile.expectedSize);\r\n                    static int lastProgress = -1;\r\n                    if (progress % 10 == 0 && progress != lastProgress) {\r\n                        printf(\"  Progress: %s - %d%% (%.2f MB / %.2f MB)\\n\",\r\n                               customData.currentFile.name.c_str(), progress,\r\n                               customData.currentFile.writtenBytes / 1e6,\r\n                               customData.currentFile.expectedSize / 1e6);\r\n                        lastProgress = progress;\r\n                    }\r\n                } else {\r\n                    break;\r\n                }\r\n            }\r\n        }\r\n    }\r\n    \r\n    actualOutputCount = 0;\r\n}\r\n\r\nint main(int argc, char* argv[]) {\r\n    if (argc < 2) {\r\n        fprintf(stderr, \"Usage: file_sink <pipeIn>\\n\");\r\n        return 1;\r\n    }\r\n    \r\n    const char* pipeIn = argv[1];\r\n    \r\n    BlockConfig config = {\r\n        \"FileSink\",         // name\r\n        1,                  // inputs\r\n        0,                  // outputs\r\n        {1501},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {},                 // outputPacketSizes\r\n        {},                 // outputBatchSizes\r\n        false,              // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        \"Streaming file sink with on-the-fly disk writes\"  // description\r\n    };\r\n    \r\n    run_generic_block(&pipeIn, nullptr, config, process_file_sink, init_file_sink);\r\n    \r\n    return 0;\r\n}",
+      "language": "cpp",
+      "inputs": 1,
+      "outputs": 0,
+      "inputPacketSizes": [
+        1501
+      ],
+      "inputBatchSizes": [
+        44740
+      ],
+      "outputPacketSizes": [],
+      "outputBatchSizes": [],
+      "inputBufferSizes": [
+        67154742
+      ],
+      "outputBufferSizes": [],
+      "inputLengthBytes": [
+        2
+      ],
+      "outputLengthBytes": [],
+      "inputSize": 67154742,
+      "outputSize": 0,
+      "inputSizes": [
+        67154742
+      ],
+      "outputSizes": [],
+      "description": ",         // name\r\n        1,                  // inputs\r\n        0,                  // outputs\r\n        {1501},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {},                 // outputPacketSizes\r\n        {},                 // outputBatchSizes\r\n        false,              // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        ",
+      "config": {
+        "name": "FileSink",
+        "description": ",         // name\r\n        1,                  // inputs\r\n        0,                  // outputs\r\n        {1501},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {},                 // outputPacketSizes\r\n        {},                 // outputBatchSizes\r\n        false,              // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        ",
+        "inputs": 1,
+        "outputs": 0,
+        "ltr": false,
+        "startWithAll": true,
+        "inputPacketSizes": [
+          1501
+        ],
+        "inputBatchSizes": [
+          44740
+        ],
+        "outputPacketSizes": [],
+        "outputBatchSizes": []
+      },
+      "color": "#ec4899",
+      "portPositions": {
+        "inputs": [
+          {
+            "x": 140,
+            "y": 40,
+            "type": "input",
+            "index": 0
+          }
+        ],
+        "outputs": []
+      },
+      "sizeRelation": {
+        "type": "sink",
+        "description": "Data sink"
+      },
+      "ltr": false,
+      "startWithAll": true,
+      "isGraph": false,
+      "graphType": null,
+      "x": 120,
+      "y": 380,
+      "zIndex": 9
+    },
+    {
+      "id": 1001,
+      "name": "FileSource",
+      "fileName": "file_source.cpp",
+      "code": "#include \"core/run_generic_block.h\"\r\n#include <vector>\r\n#include <string>\r\n#include <fstream>\r\n#include <filesystem>\r\n\r\nnamespace fs = std::filesystem;\r\n\r\n// File protocol constants\r\nconst uint8_t START_FLAG[] = {0xAA, 0x55, 0xAA, 0x55};\r\nconst uint8_t END_FLAG[] = {0x55, 0xAA, 0x55, 0xAA};\r\nconst int FILENAME_LENGTH = 256;\r\nconst int REPETITIONS = 10;\r\n\r\nstruct FileSourceData {\r\n    std::vector<std::string> filePaths;\r\n    int currentFileIdx;\r\n    std::vector<uint8_t> streamBuffer;\r\n    std::string sourceDirectory;\r\n};\r\n\r\nFileSourceData init_file_source(const BlockConfig& config) {\r\n    FileSourceData data;\r\n    data.sourceDirectory = \"Test_Files\";\r\n    data.currentFileIdx = 0;\r\n    \r\n    // Check if directory exists\r\n    if (!fs::exists(data.sourceDirectory)) {\r\n        fs::create_directories(data.sourceDirectory);\r\n        fprintf(stderr, \"Created source directory. Add files and restart.\\n\");\r\n        exit(1);\r\n    }\r\n    \r\n    // Get file list\r\n    for (const auto& entry : fs::directory_iterator(data.sourceDirectory)) {\r\n        if (entry.is_regular_file()) {\r\n            data.filePaths.push_back(entry.path().string());\r\n        }\r\n    }\r\n    \r\n    if (data.filePaths.empty()) {\r\n        fprintf(stderr, \"No files found in source directory.\\n\");\r\n        exit(1);\r\n    }\r\n    \r\n    printf(\"Found %zu file(s) to send\\n\", data.filePaths.size());\r\n    \r\n    return data;\r\n}\r\n\r\nvoid process_file_source(int8_t* inputBatch, int actualCount, int8_t* outputBatch,\r\n                        int& actualOutputCount, FileSourceData& customData, const BlockConfig& config) {\r\n    \r\n    int packetSize = config.outputPacketSizes[0];\r\n    int batchSize = config.outputBatchSizes[0];\r\n    int totalBatchBytes = batchSize * packetSize;\r\n    \r\n    // Fill buffer with files\r\n    while (customData.currentFileIdx < customData.filePaths.size() && \r\n           customData.streamBuffer.size() < totalBatchBytes) {\r\n        \r\n        std::string filePath = customData.filePaths[customData.currentFileIdx];\r\n        std::string fileName = fs::path(filePath).filename().string();\r\n        \r\n        // Read file\r\n        std::ifstream file(filePath, std::ios::binary);\r\n        if (!file) {\r\n            fprintf(stderr, \"Cannot open: %s (skipping)\\n\", fileName.c_str());\r\n            customData.currentFileIdx++;\r\n            continue;\r\n        }\r\n        \r\n        std::vector<uint8_t> fileData((std::istreambuf_iterator<char>(file)),\r\n                                      std::istreambuf_iterator<char>());\r\n        file.close();\r\n        \r\n        int fileSize = fileData.size();\r\n        printf(\"Loading file %d/%zu: %s (%.2f KB)\\n\",\r\n               customData.currentFileIdx + 1, customData.filePaths.size(),\r\n               fileName.c_str(), fileSize / 1024.0);\r\n        \r\n        // Build file packet\r\n        std::vector<uint8_t> fileStream;\r\n        \r\n        // Start flag\r\n        fileStream.insert(fileStream.end(), START_FLAG, START_FLAG + 4);\r\n        \r\n        // File name (repeated)\r\n        for (int rep = 0; rep < REPETITIONS; rep++) {\r\n            std::vector<uint8_t> nameBytes(FILENAME_LENGTH, 0);\r\n            int nameLen = std::min((int)fileName.length(), FILENAME_LENGTH);\r\n            memcpy(nameBytes.data(), fileName.c_str(), nameLen);\r\n            fileStream.insert(fileStream.end(), nameBytes.begin(), nameBytes.end());\r\n        }\r\n        \r\n        // File size (repeated)\r\n        for (int rep = 0; rep < REPETITIONS; rep++) {\r\n            uint64_t size64 = fileSize;\r\n            uint8_t* sizeBytes = (uint8_t*)&size64;\r\n            fileStream.insert(fileStream.end(), sizeBytes, sizeBytes + 8);\r\n        }\r\n        \r\n        // File data\r\n        fileStream.insert(fileStream.end(), fileData.begin(), fileData.end());\r\n        \r\n        // End flag\r\n        fileStream.insert(fileStream.end(), END_FLAG, END_FLAG + 4);\r\n        \r\n        customData.streamBuffer.insert(customData.streamBuffer.end(), \r\n                                       fileStream.begin(), fileStream.end());\r\n        \r\n        printf(\"  Added to buffer: %zu bytes (total buffer: %.2f KB)\\n\",\r\n               fileStream.size(), customData.streamBuffer.size() / 1024.0);\r\n        \r\n        customData.currentFileIdx++;\r\n        \r\n        if (customData.streamBuffer.size() >= totalBatchBytes) {\r\n            break;\r\n        }\r\n    }\r\n    \r\n    // Check if done\r\n    if (customData.currentFileIdx >= customData.filePaths.size() && \r\n        customData.streamBuffer.empty()) {\r\n        printf(\"\\n========================================\\n\");\r\n        printf(\"TRANSMISSION COMPLETE\\n\");\r\n        printf(\"========================================\\n\");\r\n        printf(\"Total files sent: %zu\\n\", customData.filePaths.size());\r\n        printf(\"========================================\\n\");\r\n        throw std::runtime_error(\"All files transmitted\");\r\n    }\r\n    \r\n    // Send batch from buffer\r\n    int availableBytes = customData.streamBuffer.size();\r\n    int maxPacketsFromBuffer = (availableBytes + packetSize - 1) / packetSize;\r\n    int packetsInThisBatch = std::min(batchSize, maxPacketsFromBuffer);\r\n    \r\n    if (packetsInThisBatch == 0) {\r\n        actualOutputCount = 0;\r\n        return;\r\n    }\r\n    \r\n    // Clear output\r\n    memset(outputBatch, 0, batchSize * packetSize);\r\n    \r\n    int bytesToSend = std::min(packetsInThisBatch * packetSize, availableBytes);\r\n    \r\n    // Copy data from buffer\r\n    for (int i = 0; i < bytesToSend; i++) {\r\n        outputBatch[i] = (int8_t)((int32_t)customData.streamBuffer[i] - 128);\r\n    }\r\n    \r\n    // Remove sent data from buffer\r\n    customData.streamBuffer.erase(customData.streamBuffer.begin(), \r\n                                   customData.streamBuffer.begin() + bytesToSend);\r\n    \r\n    actualOutputCount = packetsInThisBatch;\r\n    \r\n    printf(\"Sending batch (%d packets, buffer remaining: %.2f KB)\\n\",\r\n           packetsInThisBatch, customData.streamBuffer.size() / 1024.0);\r\n}\r\n\r\nint main(int argc, char* argv[]) {\r\n    if (argc < 2) {\r\n        fprintf(stderr, \"Usage: file_source <pipeOut>\\n\");\r\n        return 1;\r\n    }\r\n    \r\n    const char* pipeOut = argv[1];\r\n    \r\n    BlockConfig config = {\r\n        \"FileSource\",       // name\r\n        0,                  // inputs\r\n        1,                  // outputs\r\n        {},                 // inputPacketSizes\r\n        {},                 // inputBatchSizes\r\n        {1500},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        true,               // ltr\r\n        false,              // startWithAll (manual start for sources)\r\n        \"Progressive file loading with continuous buffering\"  // description\r\n    };\r\n    \r\n    run_generic_block(nullptr, &pipeOut, config, process_file_source, init_file_source);\r\n    \r\n    return 0;\r\n}",
+      "language": "cpp",
+      "inputs": 0,
+      "outputs": 1,
+      "inputPacketSizes": [],
+      "inputBatchSizes": [],
+      "outputPacketSizes": [
+        1500
+      ],
+      "outputBatchSizes": [
+        44740
+      ],
+      "inputBufferSizes": [],
+      "outputBufferSizes": [
+        67110002
+      ],
+      "inputLengthBytes": [],
+      "outputLengthBytes": [
+        2
+      ],
+      "inputSize": 0,
+      "outputSize": 67110002,
+      "inputSizes": [],
+      "outputSizes": [
+        67110002
+      ],
+      "description": ",       // name\r\n        0,                  // inputs\r\n        1,                  // outputs\r\n        {},                 // inputPacketSizes\r\n        {},                 // inputBatchSizes\r\n        {1500},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        true,               // ltr\r\n        false,              // startWithAll (manual start for sources)\r\n        ",
+      "config": {
+        "name": "FileSource",
+        "description": ",       // name\r\n        0,                  // inputs\r\n        1,                  // outputs\r\n        {},                 // inputPacketSizes\r\n        {},                 // inputBatchSizes\r\n        {1500},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        true,               // ltr\r\n        false,              // startWithAll (manual start for sources)\r\n        ",
+        "inputs": 0,
+        "outputs": 1,
+        "ltr": true,
+        "startWithAll": false,
+        "inputPacketSizes": [],
+        "inputBatchSizes": [],
+        "outputPacketSizes": [
+          1500
+        ],
+        "outputBatchSizes": [
+          44740
+        ]
+      },
+      "color": "#ec4899",
+      "portPositions": {
+        "inputs": [],
+        "outputs": [
+          {
+            "x": 140,
+            "y": 40,
+            "type": "output",
+            "index": 0
+          }
+        ]
+      },
+      "sizeRelation": {
+        "type": "source",
+        "description": "Data source"
+      },
+      "ltr": true,
+      "startWithAll": false,
+      "isGraph": false,
+      "graphType": null,
+      "x": 120,
+      "y": 260,
+      "zIndex": 10
+    },
+    {
+      "id": 1002,
+      "name": "CrcDecode",
+      "fileName": "crc_decode.cpp",
+      "code": "#include \"core/run_generic_block.h\"\r\n#include <vector>\r\n\r\n// CRC-32 table builder\r\nstd::vector<uint32_t> build_crc32_table() {\r\n    std::vector<uint32_t> table(256);\r\n    uint32_t poly = 0xEDB88320;\r\n    \r\n    for (int i = 0; i < 256; i++) {\r\n        uint32_t crc = i;\r\n        for (int j = 0; j < 8; j++) {\r\n            if (crc & 1) {\r\n                crc = (crc >> 1) ^ poly;\r\n            } else {\r\n                crc >>= 1;\r\n            }\r\n        }\r\n        table[i] = crc;\r\n    }\r\n    return table;\r\n}\r\n\r\n// Calculate CRC-32\r\nuint32_t calculate_crc32(const uint8_t* data, int length, const std::vector<uint32_t>& table) {\r\n    uint32_t crc = 0xFFFFFFFF;\r\n    for (int i = 0; i < length; i++) {\r\n        uint8_t tableIdx = (crc & 0xFF) ^ data[i];\r\n        crc = (crc >> 8) ^ table[tableIdx];\r\n    }\r\n    return crc ^ 0xFFFFFFFF;\r\n}\r\n\r\n// Custom data structure\r\nstruct CrcDecodeData {\r\n    std::vector<uint32_t> crcTable;\r\n    int errorCount;\r\n    int packetCount;\r\n};\r\n\r\n// Initialization function\r\nCrcDecodeData init_crc_decode(const BlockConfig& config) {\r\n    CrcDecodeData data;\r\n    data.crcTable = build_crc32_table();\r\n    data.errorCount = 0;\r\n    data.packetCount = 0;\r\n    return data;\r\n}\r\n\r\n// Processing function\r\nvoid process_crc_decode(int8_t* inputBatch, int actualCount, int8_t* outputBatch, \r\n                       int& actualOutputCount, CrcDecodeData& customData, const BlockConfig& config) {\r\n    \r\n    int inputPacketSize = config.inputPacketSizes[0];\r\n    int outputPacketSize = config.outputPacketSizes[0];\r\n    int outputBatchSize = config.outputBatchSizes[0];\r\n    int dataSize = inputPacketSize - 4;  // Remove CRC bytes\r\n    \r\n    // Clear output\r\n    memset(outputBatch, 0, outputBatchSize * outputPacketSize);\r\n    \r\n    // Process each packet\r\n    for (int i = 0; i < actualCount; i++) {\r\n        int inputOffset = i * inputPacketSize;\r\n        int outputOffset = i * outputPacketSize;\r\n        \r\n        // Split data and CRC\r\n        int8_t* dataInt8 = inputBatch + inputOffset;\r\n        int8_t* crcInt8 = inputBatch + inputOffset + dataSize;\r\n        \r\n        // Calculate CRC on data\r\n        uint8_t* dataAsUint8 = (uint8_t*)dataInt8;\r\n        uint32_t calculatedCrc = calculate_crc32(dataAsUint8, dataSize, customData.crcTable);\r\n        \r\n        // Extract received CRC\r\n        uint8_t crcBytes[4];\r\n        for (int j = 0; j < 4; j++) {\r\n            crcBytes[j] = (uint8_t)((int32_t)crcInt8[j] + 128);\r\n        }\r\n        uint32_t receivedCrc = *(uint32_t*)crcBytes;\r\n        \r\n        // Compare CRCs\r\n        int8_t errorFlag = (receivedCrc == calculatedCrc) ? 0 : 1;\r\n        if (errorFlag) {\r\n            customData.errorCount++;\r\n        }\r\n        \r\n        // Copy data to output\r\n        memcpy(outputBatch + outputOffset, dataInt8, dataSize);\r\n        outputBatch[outputOffset + outputPacketSize - 1] = errorFlag;\r\n        \r\n        customData.packetCount++;\r\n    }\r\n    \r\n    actualOutputCount = actualCount;\r\n    \r\n    // Periodic error reporting\r\n    if (customData.packetCount % 100000 == 0) {\r\n        double errorRate = 100.0 * customData.errorCount / customData.packetCount;\r\n        printf(\"Packets: %d, Errors: %d (%.2f%%)\\n\", \r\n               customData.packetCount, customData.errorCount, errorRate);\r\n    }\r\n}\r\n\r\nint main(int argc, char* argv[]) {\r\n    if (argc < 3) {\r\n        fprintf(stderr, \"Usage: crc_decode <pipeIn> <pipeOut>\\n\");\r\n        return 1;\r\n    }\r\n    \r\n    const char* pipeIn = argv[1];\r\n    const char* pipeOut = argv[2];\r\n    \r\n    BlockConfig config = {\r\n        \"CrcDecode\",        // name\r\n        1,                  // inputs\r\n        1,                  // outputs\r\n        {1504},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {1501},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        false,              // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        \"CRC-32 decoder with error detection - batch processing\"  // description\r\n    };\r\n    \r\n    run_generic_block(&pipeIn, &pipeOut, config, process_crc_decode, init_crc_decode);\r\n    \r\n    return 0;\r\n}",
+      "language": "cpp",
+      "inputs": 1,
+      "outputs": 1,
+      "inputPacketSizes": [
+        1504
+      ],
+      "inputBatchSizes": [
+        44740
+      ],
+      "outputPacketSizes": [
+        1501
+      ],
+      "outputBatchSizes": [
+        44740
+      ],
+      "inputBufferSizes": [
+        67288962
+      ],
+      "outputBufferSizes": [
+        67154742
+      ],
+      "inputLengthBytes": [
+        2
+      ],
+      "outputLengthBytes": [
+        2
+      ],
+      "inputSize": 67288962,
+      "outputSize": 67154742,
+      "inputSizes": [
+        67288962
+      ],
+      "outputSizes": [
+        67154742
+      ],
+      "description": ",        // name\r\n        1,                  // inputs\r\n        1,                  // outputs\r\n        {1504},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {1501},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        false,              // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        ",
+      "config": {
+        "name": "CrcDecode",
+        "description": ",        // name\r\n        1,                  // inputs\r\n        1,                  // outputs\r\n        {1504},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {1501},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        false,              // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        ",
+        "inputs": 1,
+        "outputs": 1,
+        "ltr": false,
+        "startWithAll": true,
+        "inputPacketSizes": [
+          1504
+        ],
+        "inputBatchSizes": [
+          44740
+        ],
+        "outputPacketSizes": [
+          1501
+        ],
+        "outputBatchSizes": [
+          44740
+        ]
+      },
+      "color": "#8b5cf6",
+      "portPositions": {
+        "inputs": [
+          {
+            "x": 140,
+            "y": 40,
+            "type": "input",
+            "index": 0
+          }
+        ],
+        "outputs": [
+          {
+            "x": 0,
+            "y": 40,
+            "type": "output",
+            "index": 0
+          }
+        ]
+      },
+      "sizeRelation": {
+        "type": "divide",
+        "factor": 1.001998667495439,
+        "description": "÷1.00 (,        // name\r\n        1,                  // inputs\r\n        1,                  // outputs\r\n        {1504},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {1501},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        false,              // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        )"
+      },
+      "ltr": false,
+      "startWithAll": true,
+      "isGraph": false,
+      "graphType": null,
+      "x": 300,
+      "y": 380,
+      "zIndex": 7
+    },
+    {
+      "id": 1003,
+      "name": "CrcEncode",
+      "fileName": "crc_encode.cpp",
+      "code": "#include \"core/run_generic_block.h\"\r\n#include <vector>\r\n\r\n// CRC-32 table builder\r\nstd::vector<uint32_t> build_crc32_table() {\r\n    std::vector<uint32_t> table(256);\r\n    uint32_t poly = 0xEDB88320;\r\n    \r\n    for (int i = 0; i < 256; i++) {\r\n        uint32_t crc = i;\r\n        for (int j = 0; j < 8; j++) {\r\n            if (crc & 1) {\r\n                crc = (crc >> 1) ^ poly;\r\n            } else {\r\n                crc >>= 1;\r\n            }\r\n        }\r\n        table[i] = crc;\r\n    }\r\n    return table;\r\n}\r\n\r\n// Calculate CRC-32\r\nuint32_t calculate_crc32(const uint8_t* data, int length, const std::vector<uint32_t>& table) {\r\n    uint32_t crc = 0xFFFFFFFF;\r\n    for (int i = 0; i < length; i++) {\r\n        uint8_t tableIdx = (crc & 0xFF) ^ data[i];\r\n        crc = (crc >> 8) ^ table[tableIdx];\r\n    }\r\n    return crc ^ 0xFFFFFFFF;\r\n}\r\n\r\n// Custom data structure\r\nstruct CrcEncodeData {\r\n    std::vector<uint32_t> crcTable;\r\n};\r\n\r\n// Initialization function\r\nCrcEncodeData init_crc_encode(const BlockConfig& config) {\r\n    CrcEncodeData data;\r\n    data.crcTable = build_crc32_table();\r\n    return data;\r\n}\r\n\r\n// Processing function\r\nvoid process_crc_encode(int8_t* inputBatch, int actualCount, int8_t* outputBatch, \r\n                       int& actualOutputCount, CrcEncodeData& customData, const BlockConfig& config) {\r\n    \r\n    int inputPacketSize = config.inputPacketSizes[0];\r\n    int outputPacketSize = config.outputPacketSizes[0];\r\n    int outputBatchSize = config.outputBatchSizes[0];\r\n    \r\n    // Clear output\r\n    memset(outputBatch, 0, outputBatchSize * outputPacketSize);\r\n    \r\n    // Process each packet\r\n    for (int i = 0; i < actualCount; i++) {\r\n        int inputOffset = i * inputPacketSize;\r\n        int outputOffset = i * outputPacketSize;\r\n        \r\n        // Copy input data\r\n        memcpy(outputBatch + outputOffset, inputBatch + inputOffset, inputPacketSize);\r\n        \r\n        // Calculate CRC on uint8 data\r\n        uint8_t* dataAsUint8 = (uint8_t*)(inputBatch + inputOffset);\r\n        uint32_t crc = calculate_crc32(dataAsUint8, inputPacketSize, customData.crcTable);\r\n        \r\n        // Append CRC as 4 bytes (little-endian)\r\n        uint8_t* crcBytes = (uint8_t*)&crc;\r\n        for (int j = 0; j < 4; j++) {\r\n            outputBatch[outputOffset + inputPacketSize + j] = (int8_t)((int32_t)crcBytes[j] - 128);\r\n        }\r\n    }\r\n    \r\n    actualOutputCount = actualCount;\r\n}\r\n\r\nint main(int argc, char* argv[]) {\r\n    if (argc < 3) {\r\n        fprintf(stderr, \"Usage: crc_encode <pipeIn> <pipeOut>\\n\");\r\n        return 1;\r\n    }\r\n    \r\n    const char* pipeIn = argv[1];\r\n    const char* pipeOut = argv[2];\r\n    \r\n    BlockConfig config = {\r\n        \"CrcEncode\",        // name\r\n        1,                  // inputs\r\n        1,                  // outputs\r\n        {1500},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {1504},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        true,               // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        \"CRC-32 encoder (ITU-T V.42) - batch processing\"  // description\r\n    };\r\n    \r\n    run_generic_block(&pipeIn, &pipeOut, config, process_crc_encode, init_crc_encode);\r\n    \r\n    return 0;\r\n}",
+      "language": "cpp",
+      "inputs": 1,
+      "outputs": 1,
+      "inputPacketSizes": [
+        1500
+      ],
+      "inputBatchSizes": [
+        44740
+      ],
+      "outputPacketSizes": [
+        1504
+      ],
+      "outputBatchSizes": [
+        44740
+      ],
+      "inputBufferSizes": [
+        67110002
+      ],
+      "outputBufferSizes": [
+        67288962
+      ],
+      "inputLengthBytes": [
+        2
+      ],
+      "outputLengthBytes": [
+        2
+      ],
+      "inputSize": 67110002,
+      "outputSize": 67288962,
+      "inputSizes": [
+        67110002
+      ],
+      "outputSizes": [
+        67288962
+      ],
+      "description": ",        // name\r\n        1,                  // inputs\r\n        1,                  // outputs\r\n        {1500},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {1504},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        true,               // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        ",
+      "config": {
+        "name": "CrcEncode",
+        "description": ",        // name\r\n        1,                  // inputs\r\n        1,                  // outputs\r\n        {1500},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {1504},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        true,               // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        ",
+        "inputs": 1,
+        "outputs": 1,
+        "ltr": true,
+        "startWithAll": true,
+        "inputPacketSizes": [
+          1500
+        ],
+        "inputBatchSizes": [
+          44740
+        ],
+        "outputPacketSizes": [
+          1504
+        ],
+        "outputBatchSizes": [
+          44740
+        ]
+      },
+      "color": "#6366f1",
+      "portPositions": {
+        "inputs": [
+          {
+            "x": 0,
+            "y": 40,
+            "type": "input",
+            "index": 0
+          }
+        ],
+        "outputs": [
+          {
+            "x": 140,
+            "y": 40,
+            "type": "output",
+            "index": 0
+          }
+        ]
+      },
+      "sizeRelation": {
+        "type": "multiply",
+        "factor": 1.002666666587195,
+        "description": "×1.00 (,        // name\r\n        1,                  // inputs\r\n        1,                  // outputs\r\n        {1500},             // inputPacketSizes\r\n        {44740},            // inputBatchSizes\r\n        {1504},             // outputPacketSizes\r\n        {44740},            // outputBatchSizes\r\n        true,               // ltr\r\n        true,               // startWithAll (AUTO-START)\r\n        )"
+      },
+      "ltr": true,
+      "startWithAll": true,
+      "isGraph": false,
+      "graphType": null,
+      "x": 300,
+      "y": 260,
+      "zIndex": 6
+    }
+  ],
+  "connections": [
+    {
+      "id": 1771207228372,
+      "fromBlock": 1001,
+      "fromPort": 0,
+      "toBlock": 1003,
+      "toPort": 0,
+      "waypoints": []
+    },
+    {
+      "id": 1771207235870,
+      "fromBlock": 1002,
+      "fromPort": 0,
+      "toBlock": 1000,
+      "toPort": 0,
+      "waypoints": []
+    },
+    {
+      "id": 1771207239442,
+      "fromBlock": 1003,
+      "fromPort": 0,
+      "toBlock": 1002,
+      "toPort": 0,
+      "waypoints": [
+        {
+          "x": 480,
+          "y": 300
+        },
+        {
+          "x": 480,
+          "y": 420
+        }
+      ]
+    }
+  ],
+  "timestamp": "2026-02-16T02:01:29.601Z"
+}

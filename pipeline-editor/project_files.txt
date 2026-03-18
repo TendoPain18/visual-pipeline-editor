@@ -177,6 +177,1189 @@ export default defineConfig({
   }
 });
 
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\crc_decode.cpp ---
+#include "core/run_generic_block.h"
+#include <vector>
+
+// CRC-32 table builder
+std::vector<uint32_t> build_crc32_table() {
+    std::vector<uint32_t> table(256);
+    uint32_t poly = 0xEDB88320;
+    
+    for (int i = 0; i < 256; i++) {
+        uint32_t crc = i;
+        for (int j = 0; j < 8; j++) {
+            if (crc & 1) {
+                crc = (crc >> 1) ^ poly;
+            } else {
+                crc >>= 1;
+            }
+        }
+        table[i] = crc;
+    }
+    return table;
+}
+
+// Calculate CRC-32
+uint32_t calculate_crc32(const uint8_t* data, int length, const std::vector<uint32_t>& table) {
+    uint32_t crc = 0xFFFFFFFF;
+    for (int i = 0; i < length; i++) {
+        uint8_t tableIdx = (crc & 0xFF) ^ data[i];
+        crc = (crc >> 8) ^ table[tableIdx];
+    }
+    return crc ^ 0xFFFFFFFF;
+}
+
+// Custom data structure
+struct CrcDecodeData {
+    std::vector<uint32_t> crcTable;
+    int errorCount;
+    int packetCount;
+};
+
+// Initialization function
+CrcDecodeData init_crc_decode(const BlockConfig& config) {
+    CrcDecodeData data;
+    data.crcTable = build_crc32_table();
+    data.errorCount = 0;
+    data.packetCount = 0;
+    return data;
+}
+
+// Processing function
+void process_crc_decode(int8_t* inputBatch, int actualCount, int8_t* outputBatch, 
+                       int& actualOutputCount, CrcDecodeData& customData, const BlockConfig& config) {
+    
+    int inputPacketSize = config.inputPacketSizes[0];
+    int outputPacketSize = config.outputPacketSizes[0];
+    int outputBatchSize = config.outputBatchSizes[0];
+    int dataSize = inputPacketSize - 4;  // Remove CRC bytes
+    
+    // Clear output
+    memset(outputBatch, 0, outputBatchSize * outputPacketSize);
+    
+    // Process each packet
+    for (int i = 0; i < actualCount; i++) {
+        int inputOffset = i * inputPacketSize;
+        int outputOffset = i * outputPacketSize;
+        
+        // Split data and CRC
+        int8_t* dataInt8 = inputBatch + inputOffset;
+        int8_t* crcInt8 = inputBatch + inputOffset + dataSize;
+        
+        // Calculate CRC on data
+        uint8_t* dataAsUint8 = (uint8_t*)dataInt8;
+        uint32_t calculatedCrc = calculate_crc32(dataAsUint8, dataSize, customData.crcTable);
+        
+        // Extract received CRC
+        uint8_t crcBytes[4];
+        for (int j = 0; j < 4; j++) {
+            crcBytes[j] = (uint8_t)((int32_t)crcInt8[j] + 128);
+        }
+        uint32_t receivedCrc = *(uint32_t*)crcBytes;
+        
+        // Compare CRCs
+        int8_t errorFlag = (receivedCrc == calculatedCrc) ? 0 : 1;
+        if (errorFlag) {
+            customData.errorCount++;
+        }
+        
+        // Copy data to output
+        memcpy(outputBatch + outputOffset, dataInt8, dataSize);
+        outputBatch[outputOffset + outputPacketSize - 1] = errorFlag;
+        
+        customData.packetCount++;
+    }
+    
+    actualOutputCount = actualCount;
+    
+    // Periodic error reporting
+    if (customData.packetCount % 100000 == 0) {
+        double errorRate = 100.0 * customData.errorCount / customData.packetCount;
+        printf("Packets: %d, Errors: %d (%.2f%%)\n", 
+               customData.packetCount, customData.errorCount, errorRate);
+    }
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: crc_decode <pipeIn> <pipeOut>\n");
+        return 1;
+    }
+    
+    const char* pipeIn = argv[1];
+    const char* pipeOut = argv[2];
+    
+    BlockConfig config = {
+        "CrcDecode",        // name
+        1,                  // inputs
+        1,                  // outputs
+        {1504},             // inputPacketSizes
+        {44740},            // inputBatchSizes
+        {1501},             // outputPacketSizes
+        {44740},            // outputBatchSizes
+        false,              // ltr
+        true,               // startWithAll (AUTO-START)
+        "CRC-32 decoder with error detection - batch processing"  // description
+    };
+    
+    run_generic_block(&pipeIn, &pipeOut, config, process_crc_decode, init_crc_decode);
+    
+    return 0;
+}
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\crc_encode.cpp ---
+#include "core/run_generic_block.h"
+#include <vector>
+
+// CRC-32 table builder
+std::vector<uint32_t> build_crc32_table() {
+    std::vector<uint32_t> table(256);
+    uint32_t poly = 0xEDB88320;
+    
+    for (int i = 0; i < 256; i++) {
+        uint32_t crc = i;
+        for (int j = 0; j < 8; j++) {
+            if (crc & 1) {
+                crc = (crc >> 1) ^ poly;
+            } else {
+                crc >>= 1;
+            }
+        }
+        table[i] = crc;
+    }
+    return table;
+}
+
+// Calculate CRC-32
+uint32_t calculate_crc32(const uint8_t* data, int length, const std::vector<uint32_t>& table) {
+    uint32_t crc = 0xFFFFFFFF;
+    for (int i = 0; i < length; i++) {
+        uint8_t tableIdx = (crc & 0xFF) ^ data[i];
+        crc = (crc >> 8) ^ table[tableIdx];
+    }
+    return crc ^ 0xFFFFFFFF;
+}
+
+// Custom data structure
+struct CrcEncodeData {
+    std::vector<uint32_t> crcTable;
+};
+
+// Initialization function
+CrcEncodeData init_crc_encode(const BlockConfig& config) {
+    CrcEncodeData data;
+    data.crcTable = build_crc32_table();
+    return data;
+}
+
+// Processing function
+void process_crc_encode(int8_t* inputBatch, int actualCount, int8_t* outputBatch, 
+                       int& actualOutputCount, CrcEncodeData& customData, const BlockConfig& config) {
+    
+    int inputPacketSize = config.inputPacketSizes[0];
+    int outputPacketSize = config.outputPacketSizes[0];
+    int outputBatchSize = config.outputBatchSizes[0];
+    
+    // Clear output
+    memset(outputBatch, 0, outputBatchSize * outputPacketSize);
+    
+    // Process each packet
+    for (int i = 0; i < actualCount; i++) {
+        int inputOffset = i * inputPacketSize;
+        int outputOffset = i * outputPacketSize;
+        
+        // Copy input data
+        memcpy(outputBatch + outputOffset, inputBatch + inputOffset, inputPacketSize);
+        
+        // Calculate CRC on uint8 data
+        uint8_t* dataAsUint8 = (uint8_t*)(inputBatch + inputOffset);
+        uint32_t crc = calculate_crc32(dataAsUint8, inputPacketSize, customData.crcTable);
+        
+        // Append CRC as 4 bytes (little-endian)
+        uint8_t* crcBytes = (uint8_t*)&crc;
+        for (int j = 0; j < 4; j++) {
+            outputBatch[outputOffset + inputPacketSize + j] = (int8_t)((int32_t)crcBytes[j] - 128);
+        }
+    }
+    
+    actualOutputCount = actualCount;
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: crc_encode <pipeIn> <pipeOut>\n");
+        return 1;
+    }
+    
+    const char* pipeIn = argv[1];
+    const char* pipeOut = argv[2];
+    
+    BlockConfig config = {
+        "CrcEncode",        // name
+        1,                  // inputs
+        1,                  // outputs
+        {1500},             // inputPacketSizes
+        {44740},            // inputBatchSizes
+        {1504},             // outputPacketSizes
+        {44740},            // outputBatchSizes
+        true,               // ltr
+        true,               // startWithAll (AUTO-START)
+        "CRC-32 encoder (ITU-T V.42) - batch processing"  // description
+    };
+    
+    run_generic_block(&pipeIn, &pipeOut, config, process_crc_encode, init_crc_encode);
+    
+    return 0;
+}
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\file_sink.cpp ---
+#include "core/run_generic_block.h"
+#include <vector>
+#include <string>
+#include <fstream>
+#include <filesystem>
+#include <algorithm>
+#include <map>
+
+namespace fs = std::filesystem;
+
+// File protocol constants
+const uint8_t START_FLAG[] = {0xAA, 0x55, 0xAA, 0x55};
+const uint8_t END_FLAG[] = {0x55, 0xAA, 0x55, 0xAA};
+const int FILENAME_LENGTH = 256;
+const int REPETITIONS = 10;
+
+struct FileInfo {
+    std::string name;
+    std::string tempPath;
+    std::string finalPath;
+    uint64_t expectedSize;
+    uint64_t writtenBytes;
+    int errorCount;
+    std::ofstream file;
+    bool active;
+};
+
+struct FileSinkData {
+    std::vector<uint8_t> streamBuffer;
+    FileInfo currentFile;
+    int filesReceived;
+    int totalErrorCount;
+    std::string outputDirectory;
+    std::ofstream reportFile;
+};
+
+// Helper: Find pattern in buffer
+int find_pattern(const std::vector<uint8_t>& data, const uint8_t* pattern, int patternLen) {
+    for (size_t i = 0; i <= data.size() - patternLen; i++) {
+        if (memcmp(&data[i], pattern, patternLen) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Helper: Majority vote for string
+std::string majority_vote_string(const std::vector<std::string>& strings) {
+    if (strings.empty()) return "";
+    
+    std::map<std::string, int> counts;
+    for (const auto& s : strings) {
+        counts[s]++;
+    }
+    
+    int maxCount = 0;
+    std::string result;
+    for (const auto& pair : counts) {
+        if (pair.second > maxCount) {
+            maxCount = pair.second;
+            result = pair.first;
+        }
+    }
+    return result;
+}
+
+FileSinkData init_file_sink(const BlockConfig& config) {
+    FileSinkData data;
+    data.outputDirectory = "Output_Files";
+    data.filesReceived = 0;
+    data.totalErrorCount = 0;
+    data.currentFile.active = false;
+    
+    // Create output directory
+    if (!fs::exists(data.outputDirectory)) {
+        fs::create_directories(data.outputDirectory);
+    }
+    
+    // Create error report
+    std::string reportPath = data.outputDirectory + "/error_report.txt";
+    data.reportFile.open(reportPath, std::ios::out);
+    data.reportFile << "========================================\n";
+    data.reportFile << "FILE TRANSMISSION ERROR REPORT\n";
+    data.reportFile << "========================================\n";
+    data.reportFile << "Started: " << __DATE__ << " " << __TIME__ << "\n";
+    data.reportFile << "Mode: STREAMING (on-the-fly writes)\n\n";
+    data.reportFile << "FILES RECEIVED:\n";
+    data.reportFile << "========================================\n\n";
+    data.reportFile.flush();
+    
+    printf("Output directory: %s\n", data.outputDirectory.c_str());
+    printf("Error report:     %s\n", reportPath.c_str());
+    printf("Streaming mode active - writing to disk on-the-fly...\n\n");
+    
+    return data;
+}
+
+void process_file_sink(int8_t* inputBatch, int actualCount, int8_t* outputBatch,
+                      int& actualOutputCount, FileSinkData& customData, const BlockConfig& config) {
+    
+    int packetSize = config.inputPacketSizes[0];
+    int dataSize = packetSize - 1;  // Last byte is error flag
+    
+    // Handle EOF signal
+    if (actualCount == 0) {
+        printf("Received EOF signal (0 packets)\n");
+        
+        if (customData.currentFile.active && customData.currentFile.file.is_open()) {
+            customData.currentFile.file.close();
+            if (fs::exists(customData.currentFile.tempPath)) {
+                fs::rename(customData.currentFile.tempPath, customData.currentFile.finalPath);
+            }
+            printf("Completed: %s\n", customData.currentFile.name.c_str());
+            customData.filesReceived++;
+            customData.currentFile.active = false;
+        }
+        
+        printf("\n========================================\n");
+        printf("ALL FILES RECEIVED\n");
+        printf("========================================\n");
+        printf("Total files: %d\n", customData.filesReceived);
+        printf("========================================\n");
+        
+        actualOutputCount = 0;
+        return;
+    }
+    
+    // Extract data from batch
+    std::vector<uint8_t> newData;
+    for (int i = 0; i < actualCount; i++) {
+        int offset = i * packetSize;
+        for (int j = 0; j < dataSize; j++) {
+            newData.push_back((uint8_t)((int32_t)inputBatch[offset + j] + 128));
+        }
+        
+        // Track errors
+        if (inputBatch[offset + packetSize - 1] != 0) {
+            customData.totalErrorCount++;
+        }
+    }
+    
+    // Add to stream buffer
+    customData.streamBuffer.insert(customData.streamBuffer.end(), newData.begin(), newData.end());
+    
+    // Process stream buffer
+    while (true) {
+        if (!customData.currentFile.active) {
+            // Look for START flag
+            int startPos = find_pattern(customData.streamBuffer, START_FLAG, 4);
+            
+            if (startPos < 0) {
+                if (customData.streamBuffer.size() > 4096) {
+                    customData.streamBuffer.erase(customData.streamBuffer.begin(), 
+                                                  customData.streamBuffer.end() - 4095);
+                }
+                break;
+            }
+            
+            // Parse metadata
+            int metadataSize = 4 + (FILENAME_LENGTH * REPETITIONS) + (8 * REPETITIONS);
+            
+            if (customData.streamBuffer.size() < startPos + metadataSize) {
+                break;
+            }
+            
+            // Extract filename (majority vote)
+            std::vector<std::string> fileNames;
+            int nameStart = startPos + 4;
+            for (int i = 0; i < REPETITIONS; i++) {
+                std::vector<uint8_t> nameBytes(FILENAME_LENGTH);
+                memcpy(nameBytes.data(), &customData.streamBuffer[nameStart + i * FILENAME_LENGTH], FILENAME_LENGTH);
+                
+                // Find null terminator
+                auto nullPos = std::find(nameBytes.begin(), nameBytes.end(), 0);
+                if (nullPos != nameBytes.end()) {
+                    nameBytes.erase(nullPos, nameBytes.end());
+                }
+                
+                fileNames.push_back(std::string(nameBytes.begin(), nameBytes.end()));
+            }
+            std::string fileName = majority_vote_string(fileNames);
+            
+            // Extract file size (mode)
+            std::vector<uint64_t> fileSizes;
+            int sizeStart = nameStart + (FILENAME_LENGTH * REPETITIONS);
+            for (int i = 0; i < REPETITIONS; i++) {
+                uint64_t size;
+                memcpy(&size, &customData.streamBuffer[sizeStart + i * 8], 8);
+                fileSizes.push_back(size);
+            }
+            
+            // Find mode (most common value)
+            std::map<uint64_t, int> sizeCounts;
+            for (uint64_t size : fileSizes) sizeCounts[size]++;
+            uint64_t fileSize = 0;
+            int maxCount = 0;
+            for (const auto& pair : sizeCounts) {
+                if (pair.second > maxCount) {
+                    maxCount = pair.second;
+                    fileSize = pair.first;
+                }
+            }
+            
+            // Create file paths
+            std::string safeFileName = fileName;
+            // Remove invalid characters
+            std::replace_if(safeFileName.begin(), safeFileName.end(), 
+                          [](char c) { return c == '\\' || c == '/' || c == ':' || 
+                                             c == '*' || c == '?' || c == '"' || 
+                                             c == '<' || c == '>' || c == '|'; }, '_');
+            
+            std::string tempPath = customData.outputDirectory + "/" + safeFileName + ".part";
+            std::string finalPath = customData.outputDirectory + "/" + safeFileName;
+            
+            // Open file
+            customData.currentFile.file.open(tempPath, std::ios::binary);
+            if (!customData.currentFile.file) {
+                fprintf(stderr, "Cannot create file: %s\n", tempPath.c_str());
+                break;
+            }
+            
+            printf("Started streaming: %s (%.2f MB)\n", fileName.c_str(), fileSize / 1e6);
+            
+            customData.currentFile.active = true;
+            customData.currentFile.name = fileName;
+            customData.currentFile.tempPath = tempPath;
+            customData.currentFile.finalPath = finalPath;
+            customData.currentFile.expectedSize = fileSize;
+            customData.currentFile.writtenBytes = 0;
+            customData.currentFile.errorCount = 0;
+            
+            // Remove metadata from buffer
+            int dataStart = startPos + metadataSize;
+            customData.streamBuffer.erase(customData.streamBuffer.begin(), 
+                                         customData.streamBuffer.begin() + dataStart);
+            
+        } else {
+            // Write data to file
+            uint64_t remainingBytes = customData.currentFile.expectedSize - 
+                                     customData.currentFile.writtenBytes;
+            
+            if (remainingBytes <= 0) {
+                // File complete - look for END flag
+                if (customData.streamBuffer.size() >= 4) {
+                    bool endFlagMatch = memcmp(customData.streamBuffer.data(), END_FLAG, 4) == 0;
+                    
+                    if (endFlagMatch) {
+                        customData.streamBuffer.erase(customData.streamBuffer.begin(), 
+                                                     customData.streamBuffer.begin() + 4);
+                        
+                        customData.currentFile.file.close();
+                        fs::rename(customData.currentFile.tempPath, customData.currentFile.finalPath);
+                        
+                        printf("Completed: %s (%.2f MB)", customData.currentFile.name.c_str(), 
+                               customData.currentFile.expectedSize / 1e6);
+                        
+                        if (customData.currentFile.errorCount > 0) {
+                            double errorRate = 100.0 * customData.currentFile.errorCount / 
+                                             customData.currentFile.expectedSize;
+                            printf(" - ⚠ %d errors (%.4f%%)\n", 
+                                   customData.currentFile.errorCount, errorRate);
+                        } else {
+                            printf(" - ✓ Clean\n");
+                        }
+                        
+                        customData.filesReceived++;
+                        customData.currentFile.active = false;
+                    } else {
+                        fprintf(stderr, "WARNING: END flag mismatch for %s\n", 
+                               customData.currentFile.name.c_str());
+                        customData.currentFile.file.close();
+                        customData.currentFile.active = false;
+                        customData.streamBuffer.erase(customData.streamBuffer.begin(), 
+                                                     customData.streamBuffer.begin() + 4);
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                // Write available data
+                int bytesToWrite = std::min((uint64_t)customData.streamBuffer.size(), remainingBytes);
+                
+                if (bytesToWrite > 0) {
+                    customData.currentFile.file.write((char*)customData.streamBuffer.data(), bytesToWrite);
+                    customData.currentFile.writtenBytes += bytesToWrite;
+                    customData.streamBuffer.erase(customData.streamBuffer.begin(), 
+                                                 customData.streamBuffer.begin() + bytesToWrite);
+                    
+                    // Show progress at 10% intervals
+                    int progress = (int)(100.0 * customData.currentFile.writtenBytes / 
+                                        customData.currentFile.expectedSize);
+                    static int lastProgress = -1;
+                    if (progress % 10 == 0 && progress != lastProgress) {
+                        printf("  Progress: %s - %d%% (%.2f MB / %.2f MB)\n",
+                               customData.currentFile.name.c_str(), progress,
+                               customData.currentFile.writtenBytes / 1e6,
+                               customData.currentFile.expectedSize / 1e6);
+                        lastProgress = progress;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    
+    actualOutputCount = 0;
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: file_sink <pipeIn>\n");
+        return 1;
+    }
+    
+    const char* pipeIn = argv[1];
+    
+    BlockConfig config = {
+        "FileSink",         // name
+        1,                  // inputs
+        0,                  // outputs
+        {1501},             // inputPacketSizes
+        {44740},            // inputBatchSizes
+        {},                 // outputPacketSizes
+        {},                 // outputBatchSizes
+        false,              // ltr
+        true,               // startWithAll (AUTO-START)
+        "Streaming file sink with on-the-fly disk writes"  // description
+    };
+    
+    run_generic_block(&pipeIn, nullptr, config, process_file_sink, init_file_sink);
+    
+    return 0;
+}
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\file_source.cpp ---
+#include "core/run_generic_block.h"
+#include <vector>
+#include <string>
+#include <fstream>
+#include <filesystem>
+
+namespace fs = std::filesystem;
+
+// File protocol constants
+const uint8_t START_FLAG[] = {0xAA, 0x55, 0xAA, 0x55};
+const uint8_t END_FLAG[] = {0x55, 0xAA, 0x55, 0xAA};
+const int FILENAME_LENGTH = 256;
+const int REPETITIONS = 10;
+
+struct FileSourceData {
+    std::vector<std::string> filePaths;
+    int currentFileIdx;
+    std::vector<uint8_t> streamBuffer;
+    std::string sourceDirectory;
+};
+
+FileSourceData init_file_source(const BlockConfig& config) {
+    FileSourceData data;
+    data.sourceDirectory = "Test_Files";
+    data.currentFileIdx = 0;
+    
+    // Check if directory exists
+    if (!fs::exists(data.sourceDirectory)) {
+        fs::create_directories(data.sourceDirectory);
+        fprintf(stderr, "Created source directory. Add files and restart.\n");
+        exit(1);
+    }
+    
+    // Get file list
+    for (const auto& entry : fs::directory_iterator(data.sourceDirectory)) {
+        if (entry.is_regular_file()) {
+            data.filePaths.push_back(entry.path().string());
+        }
+    }
+    
+    if (data.filePaths.empty()) {
+        fprintf(stderr, "No files found in source directory.\n");
+        exit(1);
+    }
+    
+    printf("Found %zu file(s) to send\n", data.filePaths.size());
+    
+    return data;
+}
+
+void process_file_source(int8_t* inputBatch, int actualCount, int8_t* outputBatch,
+                        int& actualOutputCount, FileSourceData& customData, const BlockConfig& config) {
+    
+    int packetSize = config.outputPacketSizes[0];
+    int batchSize = config.outputBatchSizes[0];
+    int totalBatchBytes = batchSize * packetSize;
+    
+    // Fill buffer with files
+    while (customData.currentFileIdx < customData.filePaths.size() && 
+           customData.streamBuffer.size() < totalBatchBytes) {
+        
+        std::string filePath = customData.filePaths[customData.currentFileIdx];
+        std::string fileName = fs::path(filePath).filename().string();
+        
+        // Read file
+        std::ifstream file(filePath, std::ios::binary);
+        if (!file) {
+            fprintf(stderr, "Cannot open: %s (skipping)\n", fileName.c_str());
+            customData.currentFileIdx++;
+            continue;
+        }
+        
+        std::vector<uint8_t> fileData((std::istreambuf_iterator<char>(file)),
+                                      std::istreambuf_iterator<char>());
+        file.close();
+        
+        int fileSize = fileData.size();
+        printf("Loading file %d/%zu: %s (%.2f KB)\n",
+               customData.currentFileIdx + 1, customData.filePaths.size(),
+               fileName.c_str(), fileSize / 1024.0);
+        
+        // Build file packet
+        std::vector<uint8_t> fileStream;
+        
+        // Start flag
+        fileStream.insert(fileStream.end(), START_FLAG, START_FLAG + 4);
+        
+        // File name (repeated)
+        for (int rep = 0; rep < REPETITIONS; rep++) {
+            std::vector<uint8_t> nameBytes(FILENAME_LENGTH, 0);
+            int nameLen = std::min((int)fileName.length(), FILENAME_LENGTH);
+            memcpy(nameBytes.data(), fileName.c_str(), nameLen);
+            fileStream.insert(fileStream.end(), nameBytes.begin(), nameBytes.end());
+        }
+        
+        // File size (repeated)
+        for (int rep = 0; rep < REPETITIONS; rep++) {
+            uint64_t size64 = fileSize;
+            uint8_t* sizeBytes = (uint8_t*)&size64;
+            fileStream.insert(fileStream.end(), sizeBytes, sizeBytes + 8);
+        }
+        
+        // File data
+        fileStream.insert(fileStream.end(), fileData.begin(), fileData.end());
+        
+        // End flag
+        fileStream.insert(fileStream.end(), END_FLAG, END_FLAG + 4);
+        
+        customData.streamBuffer.insert(customData.streamBuffer.end(), 
+                                       fileStream.begin(), fileStream.end());
+        
+        printf("  Added to buffer: %zu bytes (total buffer: %.2f KB)\n",
+               fileStream.size(), customData.streamBuffer.size() / 1024.0);
+        
+        customData.currentFileIdx++;
+        
+        if (customData.streamBuffer.size() >= totalBatchBytes) {
+            break;
+        }
+    }
+    
+    // Check if done
+    if (customData.currentFileIdx >= customData.filePaths.size() && 
+        customData.streamBuffer.empty()) {
+        printf("\n========================================\n");
+        printf("TRANSMISSION COMPLETE\n");
+        printf("========================================\n");
+        printf("Total files sent: %zu\n", customData.filePaths.size());
+        printf("========================================\n");
+        throw std::runtime_error("All files transmitted");
+    }
+    
+    // Send batch from buffer
+    int availableBytes = customData.streamBuffer.size();
+    int maxPacketsFromBuffer = (availableBytes + packetSize - 1) / packetSize;
+    int packetsInThisBatch = std::min(batchSize, maxPacketsFromBuffer);
+    
+    if (packetsInThisBatch == 0) {
+        actualOutputCount = 0;
+        return;
+    }
+    
+    // Clear output
+    memset(outputBatch, 0, batchSize * packetSize);
+    
+    int bytesToSend = std::min(packetsInThisBatch * packetSize, availableBytes);
+    
+    // Copy data from buffer
+    for (int i = 0; i < bytesToSend; i++) {
+        outputBatch[i] = (int8_t)((int32_t)customData.streamBuffer[i] - 128);
+    }
+    
+    // Remove sent data from buffer
+    customData.streamBuffer.erase(customData.streamBuffer.begin(), 
+                                   customData.streamBuffer.begin() + bytesToSend);
+    
+    actualOutputCount = packetsInThisBatch;
+    
+    printf("Sending batch (%d packets, buffer remaining: %.2f KB)\n",
+           packetsInThisBatch, customData.streamBuffer.size() / 1024.0);
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: file_source <pipeOut>\n");
+        return 1;
+    }
+    
+    const char* pipeOut = argv[1];
+    
+    BlockConfig config = {
+        "FileSource",       // name
+        0,                  // inputs
+        1,                  // outputs
+        {},                 // inputPacketSizes
+        {},                 // inputBatchSizes
+        {1500},             // outputPacketSizes
+        {44740},            // outputBatchSizes
+        true,               // ltr
+        false,              // startWithAll (manual start for sources)
+        "Progressive file loading with continuous buffering"  // description
+    };
+    
+    run_generic_block(nullptr, &pipeOut, config, process_file_source, init_file_source);
+    
+    return 0;
+}
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\core\cpp_socket_client.h ---
+#ifndef CPP_SOCKET_CLIENT_H
+#define CPP_SOCKET_CLIENT_H
+
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <string>
+#include <ctime>
+#include <sstream>
+#include <iomanip>
+
+#pragma comment(lib, "ws2_32.lib")
+
+class CppSocketClient {
+private:
+    SOCKET sock;
+    bool connected;
+    std::string host;
+    int port;
+
+    std::string getCurrentTimestamp() {
+        auto now = std::time(nullptr);
+        auto tm = *std::localtime(&now);
+        std::ostringstream oss;
+        oss << std::put_time(&tm, "%H:%M:%S");
+        return oss.str();
+    }
+
+public:
+    CppSocketClient(const std::string& host = "127.0.0.1", int port = 9002) 
+        : sock(INVALID_SOCKET), connected(false), host(host), port(port) {
+        
+        WSADATA wsaData;
+        int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+        if (result != 0) {
+            fprintf(stderr, "[SOCKET] WSAStartup failed: %d\n", result);
+            return;
+        }
+    }
+
+    ~CppSocketClient() {
+        if (connected) {
+            closesocket(sock);
+        }
+        WSACleanup();
+    }
+
+    bool connect(int maxRetries = 10) {
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (sock == INVALID_SOCKET) {
+                fprintf(stderr, "[SOCKET] Socket creation failed: %d\n", WSAGetLastError());
+                Sleep(500);
+                continue;
+            }
+
+            sockaddr_in serverAddr;
+            serverAddr.sin_family = AF_INET;
+            serverAddr.sin_port = htons(port);
+
+            int pton_result = inet_pton(AF_INET, host.c_str(), &serverAddr.sin_addr);
+            if (pton_result != 1) {
+                fprintf(stderr, "[SOCKET] inet_pton failed for host '%s': result=%d, WSAError=%d\n",
+                        host.c_str(), pton_result, WSAGetLastError());
+                closesocket(sock);
+                sock = INVALID_SOCKET;
+                Sleep(500);
+                continue;
+            }
+
+            if (::connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+                int err = WSAGetLastError();
+                closesocket(sock);
+                sock = INVALID_SOCKET;
+                if (attempt < maxRetries) {
+                    fprintf(stderr, "[SOCKET] Connection failed (attempt %d/%d), retrying... (WSAError=%d)\n", 
+                            attempt, maxRetries, err);
+                    Sleep(500);
+                } else {
+                    fprintf(stderr, "[SOCKET] Failed to connect after %d attempts\n", maxRetries);
+                    return false;
+                }
+            } else {
+                printf("[SOCKET] ✓ Connected to %s:%d (attempt %d/%d)\n", 
+                       host.c_str(), port, attempt, maxRetries);
+                connected = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void sendMessage(const std::string& type, int blockId, const std::string& blockName, 
+                    const std::string& data, int pid = 0) {
+        if (!connected) return;
+
+        std::ostringstream json;
+        json << "{"
+             << "\"protocol\":\"CPP_V1\","
+             << "\"timestamp\":\"" << getCurrentTimestamp() << "\","
+             << "\"blockId\":" << blockId << ","
+             << "\"blockName\":\"" << blockName << "\","
+             << "\"type\":\"" << type << "\"";
+        
+        if (pid > 0) {
+            json << ",\"pid\":" << pid;
+        }
+        
+        json << ",\"data\":";
+        
+        if (type == "BLOCK_METRICS") {
+            json << data;
+        } else {
+            json << "{\"status\":\"" << data << "\"}";
+        }
+        
+        json << "}\n";
+
+        std::string message = json.str();
+        send(sock, message.c_str(), (int)message.length(), 0);
+    }
+
+    void sendInit(int blockId, const std::string& blockName, int pid) {
+        sendMessage("BLOCK_INIT", blockId, blockName, "initializing", pid);
+    }
+
+    void sendReady(int blockId, const std::string& blockName) {
+        sendMessage("BLOCK_READY", blockId, blockName, "ready");
+    }
+
+    void sendError(int blockId, const std::string& blockName, const std::string& error) {
+        sendMessage("BLOCK_ERROR", blockId, blockName, error);
+    }
+
+    void sendMetrics(int blockId, const std::string& blockName, 
+                    int frames, double gbps, double totalGB = -1) {
+        std::ostringstream data;
+        data << "{\"frames\":" << frames 
+             << ",\"gbps\":" << gbps
+             << ",\"totalGB\":" << totalGB << "}";
+        sendMessage("BLOCK_METRICS", blockId, blockName, data.str());
+    }
+
+    void sendStopping(int blockId, const std::string& blockName) {
+        sendMessage("BLOCK_STOPPING", blockId, blockName, "stopping");
+    }
+
+    void sendStopped(int blockId, const std::string& blockName) {
+        sendMessage("BLOCK_STOPPED", blockId, blockName, "stopped");
+    }
+};
+
+// Get environment variable with default value
+inline int getEnvInt(const char* name, int defaultValue) {
+    char* value = getenv(name);
+    return value ? atoi(value) : defaultValue;
+}
+
+inline std::string getEnvString(const char* name, const std::string& defaultValue) {
+    char* value = getenv(name);
+    return value ? std::string(value) : defaultValue;
+}
+
+#endif // CPP_SOCKET_CLIENT_H
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\core\run_generic_block.h ---
+#ifndef RUN_GENERIC_BLOCK_H
+#define RUN_GENERIC_BLOCK_H
+
+#include "cpp_socket_client.h"
+#include <windows.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <string>
+#include <vector>
+
+struct BlockConfig {
+    const char* name;
+    int inputs;
+    int outputs;
+    std::vector<int> inputPacketSizes;
+    std::vector<int> inputBatchSizes;
+    std::vector<int> outputPacketSizes;
+    std::vector<int> outputBatchSizes;
+    bool ltr;
+    bool startWithAll;
+    const char* description;
+};
+
+// Calculate length bytes needed for batch count
+inline int calculateLengthBytes(int maxCount) {
+    if (maxCount <= 255) return 1;
+    if (maxCount <= 65535) return 2;
+    if (maxCount <= 16777215) return 3;
+    return 4;
+}
+
+// Write batch to pipe with length header
+inline void writeBatch(const char* pipeName, int8_t* batchData, int actualCount, 
+                      int lengthBytes, int totalSize) {
+    std::string instanceId = getEnvString("INSTANCE_ID", "");
+    std::string fullPipeName = "Instance_" + instanceId + "_" + std::string(pipeName);
+    
+    char readyName[256], emptyName[256];
+    sprintf(readyName, "%s_Ready", fullPipeName.c_str());
+    sprintf(emptyName, "%s_Empty", fullPipeName.c_str());
+    
+    HANDLE hMapFile = OpenFileMappingA(FILE_MAP_WRITE, FALSE, fullPipeName.c_str());
+    if (!hMapFile) {
+        fprintf(stderr, "[PIPE] Failed to open %s: %lu\n", fullPipeName.c_str(), GetLastError());
+        return;
+    }
+    
+    void* pBuf = MapViewOfFile(hMapFile, FILE_MAP_WRITE, 0, 0, totalSize);
+    if (!pBuf) {
+        CloseHandle(hMapFile);
+        return;
+    }
+    
+    HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, emptyName);
+    HANDLE hReady = OpenEventA(EVENT_MODIFY_STATE, FALSE, readyName);
+    
+    WaitForSingleObject(hEmpty, INFINITE);
+    
+    uint8_t* buffer = (uint8_t*)pBuf;
+    for (int i = 0; i < lengthBytes; i++) {
+        buffer[i] = (actualCount >> (i * 8)) & 0xFF;
+    }
+    
+    memcpy(buffer + lengthBytes, batchData, totalSize - lengthBytes);
+    
+    SetEvent(hReady);
+    
+    UnmapViewOfFile(pBuf);
+    CloseHandle(hMapFile);
+    CloseHandle(hEmpty);
+    CloseHandle(hReady);
+}
+
+// Read batch from pipe with length header
+inline int readBatch(const char* pipeName, int8_t* batchData, int lengthBytes, int totalSize) {
+    std::string instanceId = getEnvString("INSTANCE_ID", "");
+    std::string fullPipeName = "Instance_" + instanceId + "_" + std::string(pipeName);
+    
+    char readyName[256], emptyName[256];
+    sprintf(readyName, "%s_Ready", fullPipeName.c_str());
+    sprintf(emptyName, "%s_Empty", fullPipeName.c_str());
+    
+    HANDLE hMapFile = OpenFileMappingA(FILE_MAP_READ, FALSE, fullPipeName.c_str());
+    if (!hMapFile) {
+        fprintf(stderr, "[PIPE] Failed to open %s: %lu\n", fullPipeName.c_str(), GetLastError());
+        return 0;
+    }
+    
+    void* pBuf = MapViewOfFile(hMapFile, FILE_MAP_READ, 0, 0, totalSize);
+    if (!pBuf) {
+        CloseHandle(hMapFile);
+        return 0;
+    }
+    
+    HANDLE hReady = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, readyName);
+    HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE, FALSE, emptyName);
+    
+    WaitForSingleObject(hReady, INFINITE);
+    
+    uint8_t* buffer = (uint8_t*)pBuf;
+    int actualCount = 0;
+    for (int i = 0; i < lengthBytes; i++) {
+        actualCount |= buffer[i] << (i * 8);
+    }
+    
+    memcpy(batchData, buffer + lengthBytes, totalSize - lengthBytes);
+    
+    SetEvent(hEmpty);
+    
+    UnmapViewOfFile(pBuf);
+    CloseHandle(hMapFile);
+    CloseHandle(hReady);
+    CloseHandle(hEmpty);
+    
+    return actualCount;
+}
+
+// Generic block runner
+template<typename CustomData>
+void run_generic_block(
+    const char** pipeIn,
+    const char** pipeOut,
+    const BlockConfig& config,
+    void (*process_fn)(int8_t*, int, int8_t*, int&, CustomData&, const BlockConfig&),
+    CustomData (*init_fn)(const BlockConfig&) = nullptr
+) {
+    // Get block ID from environment
+    int blockId = getEnvInt("BLOCK_ID", 0);
+    int cppPort = getEnvInt("CPP_PORT", 9002);
+    
+    // Connect to socket
+    CppSocketClient socket("127.0.0.1", cppPort);
+    if (!socket.connect(10)) {
+        fprintf(stderr, "[BLOCK] Failed to connect to socket server\n");
+        return;
+    }
+    
+    // Get process PID
+    DWORD pid = GetCurrentProcessId();
+    
+    // Send init message with PID
+    socket.sendInit(blockId, config.name, pid);
+    
+    printf("\n========================================\n");
+    printf("%s - Generic Block Framework\n", config.name);
+    printf("========================================\n");
+    
+    bool isSource = (config.inputs == 0);
+    bool isSink = (config.outputs == 0);
+    
+    // Calculate buffer parameters
+    int inputPacketSize = 0, inputBatchSize = 0, inputLengthBytes = 0, inputBufferSize = 0;
+    int outputPacketSize = 0, outputBatchSize = 0, outputLengthBytes = 0, outputBufferSize = 0;
+    
+    if (!isSource) {
+        inputPacketSize = config.inputPacketSizes[0];
+        inputBatchSize = config.inputBatchSizes[0];
+        inputLengthBytes = calculateLengthBytes(inputBatchSize);
+        inputBufferSize = inputLengthBytes + (inputPacketSize * inputBatchSize);
+        printf("INPUT:  %d bytes × %d packets (header: %dB, total: %.2fKB)\n",
+               inputPacketSize, inputBatchSize, inputLengthBytes, inputBufferSize/1024.0);
+    }
+    
+    if (!isSink) {
+        outputPacketSize = config.outputPacketSizes[0];
+        outputBatchSize = config.outputBatchSizes[0];
+        outputLengthBytes = calculateLengthBytes(outputBatchSize);
+        outputBufferSize = outputLengthBytes + (outputPacketSize * outputBatchSize);
+        printf("OUTPUT: %d bytes × %d packets (header: %dB, total: %.2fKB)\n",
+               outputPacketSize, outputBatchSize, outputLengthBytes, outputBufferSize/1024.0);
+    }
+    
+    printf("========================================\n\n");
+    
+    // Custom initialization
+    CustomData customData;
+    if (init_fn) {
+        printf("Running custom initialization...\n");
+        customData = init_fn(config);
+    }
+    
+    socket.sendReady(blockId, config.name);
+    
+    // Allocate buffers
+    int8_t* inputBatch = isSource ? nullptr : new int8_t[inputBufferSize];
+    int8_t* outputBatch = isSink ? nullptr : new int8_t[outputBufferSize];
+    
+    // Metrics
+    int batchCount = 0;
+    double totalBytes = 0;
+    LARGE_INTEGER freq, startTime, lastTime;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&startTime);
+    lastTime = startTime;
+    
+    // Main loop
+    try {
+        while (true) {
+            int actualInputCount = 0;
+            
+            // Read input
+            if (!isSource) {
+                actualInputCount = readBatch(pipeIn[0], inputBatch, inputLengthBytes, inputBufferSize);
+            }
+            
+            // Process
+            int actualOutputCount = 0;
+            process_fn(inputBatch, actualInputCount, outputBatch, actualOutputCount, customData, config);
+            
+            // Write output
+            if (!isSink && outputBatch) {
+                writeBatch(pipeOut[0], outputBatch, actualOutputCount, outputLengthBytes, outputBufferSize);
+            }
+            
+            batchCount++;
+            
+            // Calculate throughput
+            if (!isSink) {
+                totalBytes += outputBufferSize;
+            } else if (!isSource) {
+                totalBytes += inputBufferSize;
+            }
+            
+            LARGE_INTEGER currentTime;
+            QueryPerformanceCounter(&currentTime);
+            double elapsed = (double)(currentTime.QuadPart - lastTime.QuadPart) / freq.QuadPart;
+            
+            if (elapsed > 0) {
+                double instantGbps = ((totalBytes * 8.0) / 1e9) / elapsed;
+                socket.sendMetrics(blockId, config.name, batchCount, instantGbps, totalBytes / 1e9);
+                lastTime = currentTime;
+            }
+            
+            if (batchCount % 100 == 0) {
+                LARGE_INTEGER now;
+                QueryPerformanceCounter(&now);
+                double totalElapsed = (double)(now.QuadPart - startTime.QuadPart) / freq.QuadPart;
+                double avgGbps = ((totalBytes * 8.0) / 1e9) / totalElapsed;
+                printf("Batches: %d, Avg Throughput: %.2f Gbps\n", batchCount, avgGbps);
+            }
+        }
+    } catch (...) {
+        printf("\nBlock finished\n");
+        printf("Total batches: %d\n", batchCount);
+        printf("Total data: %.2f GB\n", totalBytes / 1e9);
+        
+        socket.sendStopped(blockId, config.name);
+    }
+    
+    // Cleanup
+    if (inputBatch) delete[] inputBatch;
+    if (outputBatch) delete[] outputBatch;
+}
+
+#endif // RUN_GENERIC_BLOCK_H
+
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\matlab_blocks\crc_decode.m ---
 function crc_decode(pipeIn, pipeOut)
 % CRC_DECODE - ITU-T CRC-32 decoder using generic block framework
@@ -864,6 +2047,48 @@ function [outputBatch, actualOutputCount] = process_file_source_persistent(~, ~,
     fprintf('Sending batch (%d packets, buffer remaining: %.2f KB)\n', ...
             packetsInThisBatch, length(state.streamBuffer)/1024);
 end
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\matlab_blocks\launch_1000.bat ---
+@echo off
+set BLOCK_ID=1000
+set INSTANCE_ID=1771207711699_3394
+set MATLAB_PORT=9001
+matlab -batch "cd('C:\Users\amrga\Downloads\final\pipeline-editor/matlab_blocks'); addpath('C:\Users\amrga\Downloads\final\pipeline-editor/server'); crc_decode('P3', 'P1')"
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\matlab_blocks\launch_1001.bat ---
+@echo off
+set BLOCK_ID=1001
+set INSTANCE_ID=1771207711699_3394
+set MATLAB_PORT=9001
+matlab -batch "cd('C:\Users\amrga\Downloads\final\pipeline-editor/matlab_blocks'); addpath('C:\Users\amrga\Downloads\final\pipeline-editor/server'); crc_encode('P2', 'P3')"
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\matlab_blocks\launch_1003.bat ---
+@echo off
+set BLOCK_ID=1003
+set INSTANCE_ID=1771207711699_3394
+set MATLAB_PORT=9001
+matlab -batch "cd('C:\Users\amrga\Downloads\final\pipeline-editor/matlab_blocks'); addpath('C:\Users\amrga\Downloads\final\pipeline-editor/server'); file_sink('P1')"
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\matlab_blocks\launch_1004.bat ---
+@echo off
+set BLOCK_ID=1004
+set INSTANCE_ID=1771207711699_3394
+set MATLAB_PORT=9001
+matlab -batch "cd('C:\Users\amrga\Downloads\final\pipeline-editor/matlab_blocks'); addpath('C:\Users\amrga\Downloads\final\pipeline-editor/server'); addpath('C:\Users\amrga\Downloads\final\pipeline-editor/matlab_blocks/core'); crc_decode('P3', 'P2')"
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\matlab_blocks\launch_1005.bat ---
+@echo off
+set BLOCK_ID=1005
+set INSTANCE_ID=1771207711699_3394
+set MATLAB_PORT=9001
+matlab -batch "cd('C:\Users\amrga\Downloads\final\pipeline-editor/matlab_blocks'); addpath('C:\Users\amrga\Downloads\final\pipeline-editor/server'); addpath('C:\Users\amrga\Downloads\final\pipeline-editor/matlab_blocks/core'); crc_encode('P1', 'P3')"
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\matlab_blocks\launch_1006.bat ---
+@echo off
+set BLOCK_ID=1006
+set INSTANCE_ID=1771207711699_3394
+set MATLAB_PORT=9001
+matlab -batch "cd('C:\Users\amrga\Downloads\final\pipeline-editor/matlab_blocks'); addpath('C:\Users\amrga\Downloads\final\pipeline-editor/server'); addpath('C:\Users\amrga\Downloads\final\pipeline-editor/matlab_blocks/core'); file_sink('P2')"
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\matlab_blocks\core\matlab_socket_client.m ---
 function socketObj = matlab_socket_client(host, port, maxRetries)
@@ -1764,6 +2989,7 @@ import { useFileOperations } from './hooks/useFileOperations';
 import { useServerOperations } from './hooks/useServerOperations';
 import { useCanvasHandlers } from './hooks/useCanvasHandlers';
 import { GRID_SIZE, parseMatlabBlock, calculatePortPositions, BLOCK_WIDTH, BLOCK_HEIGHT } from './utils/blockUtils';
+import { parseCppBlock } from './utils/cppBlockUtils';
 
 const PipelineEditor = () => {
   const [sidebarMode, setSidebarMode] = useState(null);
@@ -1782,6 +3008,7 @@ const PipelineEditor = () => {
   const canvasRef = useRef(null);
   const serverMessageListenerRef = useRef(null);
   const socketStatusListenerRef = useRef(null);
+  const blockMessageListenerRef = useRef(null);
 
   const addLog = (type, message) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -1925,6 +3152,7 @@ const PipelineEditor = () => {
       addLog('info', `Instance ID: ${config.instanceId}`);
       addLog('info', `Server Port: ${config.serverPort}`);
       addLog('info', `MATLAB Port: ${config.matlabPort}`);
+      addLog('info', `C++ Port:    ${config.cppPort}`);
       
       const dir = await window.electronAPI.getAppPath();
       setProjectDir(dir);
@@ -2018,21 +3246,25 @@ const PipelineEditor = () => {
     };
   }, []);
 
-  // Listen to MATLAB block messages via socket
+  // Listen to block messages (MATLAB/C++/Python) via language-specific socket servers
   useEffect(() => {
-    const listener = window.electronAPI.onMatlabMessage((message) => {
-      console.log('MATLAB socket message:', message);
+    if (blockMessageListenerRef.current) {
+      blockMessageListenerRef.current();
+    }
+    
+    blockMessageListenerRef.current = window.electronAPI.onBlockMessage((message) => {
+      console.log(`[${message.language}] Socket message:`, message);
       
-      const { protocol, blockId, blockName, type, data, timestamp } = message;
+      const { protocol, blockId, blockName, type, data, timestamp, language } = message;
       
       switch (type) {
         case 'BLOCK_INIT':
-          addLog('info', `[${blockName}] Initializing...`);
+          addLog('info', `[${blockName}] [${language}] Initializing...`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'initializing' }));
           break;
           
         case 'BLOCK_READY':
-          addLog('success', `[${blockName}] Ready`);
+          addLog('success', `[${blockName}] [${language}] Ready`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'ready' }));
           setBlockProcesses(prev => {
             const blockEntry = Object.entries(prev).find(([key, proc]) => 
@@ -2042,7 +3274,7 @@ const PipelineEditor = () => {
               const [key, proc] = blockEntry;
               return {
                 ...prev,
-                [key]: { ...proc, status: 'running' }
+                [key]: { ...proc, status: 'running', language }
               };
             }
             return prev;
@@ -2086,17 +3318,17 @@ const PipelineEditor = () => {
           break;
           
         case 'BLOCK_ERROR':
-          addLog('error', `[${blockName}] ${data.error || data.status || 'Error'}`);
+          addLog('error', `[${blockName}] [${language}] ${data.error || data.status || 'Error'}`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'error' }));
           break;
           
         case 'BLOCK_STOPPING':
-          addLog('info', `[${blockName}] Stopping...`);
+          addLog('info', `[${blockName}] [${language}] Stopping...`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'stopping' }));
           break;
           
         case 'BLOCK_STOPPED':
-          addLog('info', `[${blockName}] Stopped`);
+          addLog('info', `[${blockName}] [${language}] Stopped`);
           setBlockStatus(prev => {
             const newStatus = { ...prev };
             delete newStatus[blockId];
@@ -2106,7 +3338,11 @@ const PipelineEditor = () => {
       }
     });
     
-    return () => listener();
+    return () => {
+      if (blockMessageListenerRef.current) {
+        blockMessageListenerRef.current();
+      }
+    };
   }, []);
 
   // Update graph windows when graph data changes
@@ -2206,8 +3442,15 @@ const PipelineEditor = () => {
     const block = selectedBlocks[0];
     
     try {
-      // RE-PARSE the block with updated code
-      const reparsedData = parseMatlabBlock(updatedCode, block.fileName);
+      // RE-PARSE the block with updated code based on language
+      let reparsedData;
+      if (block.language === 'matlab') {
+        reparsedData = parseMatlabBlock(updatedCode, block.fileName);
+      } else if (block.language === 'cpp') {
+        reparsedData = parseCppBlock(updatedCode, block.fileName);
+      } else {
+        throw new Error(`Unsupported language: ${block.language}`);
+      }
       
       // Calculate new port positions
       const newPortPositions = calculatePortPositions(
@@ -2228,7 +3471,7 @@ const PipelineEditor = () => {
         outputs: reparsedData.outputs,
         config: reparsedData.config,
         
-        // BATCH PROCESSING FIELDS (NEW)
+        // BATCH PROCESSING FIELDS
         inputPacketSizes: reparsedData.inputPacketSizes,
         inputBatchSizes: reparsedData.inputBatchSizes,
         outputPacketSizes: reparsedData.outputPacketSizes,
@@ -2238,7 +3481,7 @@ const PipelineEditor = () => {
         inputLengthBytes: reparsedData.inputLengthBytes,
         outputLengthBytes: reparsedData.outputLengthBytes,
         
-        // Legacy fields (for backward compatibility)
+        // Legacy fields
         sizeRelation: reparsedData.sizeRelation,
         inputSize: reparsedData.inputSize,
         outputSize: reparsedData.outputSize,
@@ -2250,7 +3493,8 @@ const PipelineEditor = () => {
         startWithAll: reparsedData.startWithAll,
         isGraph: reparsedData.isGraph,
         graphType: reparsedData.graphType,
-        description: reparsedData.description
+        description: reparsedData.description,
+        language: reparsedData.language || block.language
       };
       
       // Check if any connections need to be removed due to port changes
@@ -2279,7 +3523,7 @@ const PipelineEditor = () => {
       setIsEditingCode(false);
     } catch (error) {
       addLog('error', `Failed to parse updated code: ${error.message}`);
-      alert(`Error updating block:\n${error.message}\n\nPlease check your block_config section.`);
+      alert(`Error updating block:\n${error.message}\n\nPlease check your block configuration.`);
     }
   };
 
@@ -2476,16 +3720,25 @@ import started from 'electron-squirrel-startup';
 import net from 'net';
 
 const execAsync = promisify(exec);
-const runningProcesses = new Map();   // shellPid -> { process, name, realMatlabPid, ... }
-const shellToMatlabPid = new Map();   // shellPid -> realMatlabPid (set when MATLAB reports itself)
-const blockIdToMatlabPid = new Map(); // blockId  -> realMatlabPid (from BLOCK_INIT message)
+const runningProcesses = new Map();
+const shellToProcessPid = new Map();
+const blockIdToProcessPid = new Map();
 
+// Language-specific socket servers
 let serverSocket = null;
 let serverSocketConnected = false;
+let matlabSocketServer = null;
+let cppSocketServer = null;
+const matlabClients = new Map();
+const cppClients = new Map();
 
 let instanceId = null;
 let serverPort = null;
 let matlabPort = null;
+let cppPort = null;
+
+// Safe block ID counter (avoids overflow)
+let blockIdCounter = 1000;
 
 const generateInstanceId = () => `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
 
@@ -2503,9 +3756,6 @@ const findAvailablePort = (basePort) => {
     testServer.listen(basePort);
   });
 };
-
-let matlabSocketServer = null;
-const matlabClients = new Map();
 
 if (started) app.quit();
 
@@ -2525,74 +3775,76 @@ const sendToServer = (messageObj) => {
 };
 
 const registerPidWithServer = (realPid, blockName) => {
-  console.log(`[PID Registry] ✓ Registering MATLAB PID ${realPid} (${blockName})`);
+  console.log(`[PID Registry] ✓ Registering PID ${realPid} (${blockName})`);
   sendToServer({ type: 'REGISTER_PID', pid: realPid, name: blockName });
 };
 
 const unregisterPidWithServer = (realPid, blockName) => {
-  console.log(`[PID Registry] Unregistering MATLAB PID ${realPid} (${blockName})`);
+  console.log(`[PID Registry] Unregistering PID ${realPid} (${blockName})`);
   sendToServer({ type: 'UNREGISTER_PID', pid: realPid, name: blockName });
 };
 
 // ============================================================
-// MATLAB SELF-REPORTED PID
+// LANGUAGE-AGNOSTIC BLOCK INIT HANDLER
 // ============================================================
-//
-// MATLAB calls feature('getpid') and includes it in the BLOCK_INIT
-// socket message. When we receive that message we register the real
-// MATLAB PID immediately - no polling, no wmic, no PowerShell needed.
-//
-// Called from the MATLAB socket data handler below.
 
-const onMatlabBlockInit = (blockId, blockName, matlabPid) => {
-  if (!matlabPid || matlabPid <= 0) return;
+const onBlockInit = (blockId, blockName, processPid, language) => {
+  if (!processPid || processPid <= 0) return;
 
-  console.log(`[PID Registry] MATLAB block "${blockName}" (ID:${blockId}) self-reported PID: ${matlabPid}`);
+  console.log(`[PID Registry] ${language} block "${blockName}" (ID:${blockId}) self-reported PID: ${processPid}`);
 
-  // Store mapping from blockId -> real PID
-  blockIdToMatlabPid.set(String(blockId), matlabPid);
+  blockIdToProcessPid.set(String(blockId), processPid);
 
-  // Also link it back to the shell process so kill-process finds it
-  // Find the runningProcesses entry whose blockId matches
   for (const [shellPid, entry] of runningProcesses.entries()) {
-    // Match by name since blockId isn't stored on the process entry
-    if (entry.name === blockName && !entry.realMatlabPid) {
-      entry.realMatlabPid = matlabPid;
-      shellToMatlabPid.set(shellPid, matlabPid);
-      console.log(`[PID Registry] Linked shell PID ${shellPid} -> MATLAB PID ${matlabPid} (${blockName})`);
+    if (entry.name === blockName && !entry.realProcessPid) {
+      entry.realProcessPid = processPid;
+      entry.language = language;
+      shellToProcessPid.set(shellPid, processPid);
+      console.log(`[PID Registry] Linked shell PID ${shellPid} -> ${language} PID ${processPid} (${blockName})`);
       break;
     }
   }
 
-  registerPidWithServer(matlabPid, blockName);
+  registerPidWithServer(processPid, blockName);
 };
 
-const onMatlabBlockStopped = (blockId, blockName) => {
-  const matlabPid = blockIdToMatlabPid.get(String(blockId));
-  if (matlabPid) {
-    unregisterPidWithServer(matlabPid, blockName);
-    blockIdToMatlabPid.delete(String(blockId));
+const onBlockStopped = (blockId, blockName) => {
+  const processPid = blockIdToProcessPid.get(String(blockId));
+  if (processPid) {
+    unregisterPidWithServer(processPid, blockName);
+    blockIdToProcessPid.delete(String(blockId));
   }
 };
 
 // ============================================================
+// WINDOW CREATION
+// ============================================================
 
 const createWindow = async () => {
+  console.log('\n╔════════════════════════════════════════╗');
+  console.log('║   ELECTRON MAIN PROCESS STARTING      ║');
+  console.log('╚════════════════════════════════════════╝\n');
+
   instanceId = generateInstanceId();
   serverPort = await findAvailablePort(9000);
   matlabPort = await findAvailablePort(9001);
+  cppPort = await findAvailablePort(9002);
 
-  console.log(`========================================`);
-  console.log(`INSTANCE ID: ${instanceId}`);
-  console.log(`Server Port: ${serverPort}`);
-  console.log(`MATLAB Port: ${matlabPort}`);
-  console.log(`========================================`);
+  console.log('========================================');
+  console.log('INSTANCE CONFIGURATION');
+  console.log('========================================');
+  console.log(`Instance ID:  ${instanceId}`);
+  console.log(`Server Port:  ${serverPort}`);
+  console.log(`MATLAB Port:  ${matlabPort}`);
+  console.log(`C++ Port:     ${cppPort}`);
+  console.log('========================================\n');
 
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
   const windowWidth = Math.min(1400, Math.floor(width * 0.9));
   const windowHeight = Math.min(900, Math.floor(height * 0.9));
 
+  console.log('Creating browser window...');
   mainWindow = new BrowserWindow({
     width: windowWidth,
     height: windowHeight,
@@ -2607,21 +3859,37 @@ const createWindow = async () => {
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+    console.log('✓ Loaded development URL');
   } else {
     mainWindow.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
+    console.log('✓ Loaded production HTML');
   }
 
   mainWindow.webContents.openDevTools();
+  console.log('✓ DevTools opened\n');
 
   mainWindow.on('close', async (e) => {
+    console.log('\n[CLEANUP] Window closing...');
     e.preventDefault();
     await cleanupAllProcesses();
     if (serverSocket) { serverSocket.destroy(); serverSocket = null; }
-    stopMatlabSocketServer();
+    stopLanguageSocketServers();
     mainWindow.destroy();
+    console.log('[CLEANUP] Complete\n');
   });
 
-  startMatlabSocketServer();
+  // ============================================================
+  // START LANGUAGE SOCKET SERVERS IMMEDIATELY
+  // ============================================================
+  console.log('╔════════════════════════════════════════╗');
+  console.log('║   STARTING SOCKET SERVERS NOW         ║');
+  console.log('╚════════════════════════════════════════╝\n');
+  
+  startLanguageSocketServers();
+  
+  console.log('╔════════════════════════════════════════╗');
+  console.log('║   SOCKET SERVERS INITIALIZATION DONE  ║');
+  console.log('╚════════════════════════════════════════╝\n');
 };
 
 const killProcessTree = (pid) => {
@@ -2636,19 +3904,19 @@ const killProcessTree = (pid) => {
 };
 
 const cleanupAllProcesses = async () => {
-  console.log('Cleaning up all processes...');
+  console.log('[CLEANUP] Cleaning up all processes...');
   for (const [pid, info] of runningProcesses.entries()) {
     try {
       await killProcessTree(pid);
       try { info.process.kill('SIGKILL'); } catch (_) {}
     } catch (err) {
-      console.error(`Error killing process ${pid}:`, err);
+      console.error(`[CLEANUP] Error killing process ${pid}:`, err);
     }
   }
   runningProcesses.clear();
-  shellToMatlabPid.clear();
-  blockIdToMatlabPid.clear();
-  console.log('All processes cleaned up');
+  shellToProcessPid.clear();
+  blockIdToProcessPid.clear();
+  console.log('[CLEANUP] All processes cleaned up');
 };
 
 const connectToServer = (port, retries = 30) => {
@@ -2657,13 +3925,13 @@ const connectToServer = (port, retries = 30) => {
 
     const attemptConnection = () => {
       attemptCount++;
-      console.log(`Connecting to server on port ${port} (attempt ${attemptCount}/${retries})...`);
+      console.log(`[SERVER CONNECT] Connecting to pipe server on port ${port} (attempt ${attemptCount}/${retries})...`);
 
       const client = new net.Socket();
       client.setTimeout(1000);
 
-      client.connect(port, 'localhost', () => {
-        console.log(`Connected to C++ server on port ${port}`);
+      client.connect(port, '127.0.0.1', () => {
+        console.log(`[SERVER CONNECT] ✓ Connected to C++ server on port ${port}`);
         serverSocketConnected = true;
         mainWindow.webContents.send('server-socket-status', { connected: true, port });
         client.setTimeout(0);
@@ -2676,7 +3944,7 @@ const connectToServer = (port, retries = 30) => {
           try {
             mainWindow.webContents.send('server-message', JSON.parse(msg));
           } catch (err) {
-            console.error('Failed to parse server message:', msg, err);
+            console.error('[SERVER CONNECT] Failed to parse server message:', msg, err);
           }
         });
       });
@@ -2710,11 +3978,187 @@ const connectToServer = (port, retries = 30) => {
 };
 
 // ============================================================
+// LANGUAGE SOCKET SERVERS
+// ============================================================
+
+const startLanguageSocketServers = () => {
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('  INITIALIZING LANGUAGE SOCKET SERVERS');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+  
+  // MATLAB Socket Server
+  console.log(`[MATLAB SERVER] Creating server for port ${matlabPort}...`);
+  try {
+    matlabSocketServer = net.createServer((client) => {
+      const clientId = `${client.remoteAddress}:${client.remotePort}`;
+      console.log(`[MATLAB SERVER] ✓ Client connected: ${clientId}`);
+      matlabClients.set(clientId, { socket: client, buffer: '' });
+
+      client.on('data', (data) => {
+        const info = matlabClients.get(clientId);
+        if (!info) return;
+        info.buffer += data.toString();
+        const lines = info.buffer.split('\n');
+        info.buffer = lines.pop();
+
+        lines.forEach(line => {
+          if (!line.trim()) return;
+          try {
+            const parsed = JSON.parse(line);
+            console.log(`[MATLAB SERVER] Received message from ${clientId}:`, parsed.type, `(block: ${parsed.blockName})`);
+
+            if (parsed.type === 'BLOCK_INIT' && parsed.pid && parsed.pid > 0) {
+              onBlockInit(parsed.blockId, parsed.blockName, parsed.pid, 'MATLAB');
+            }
+
+            if (parsed.type === 'BLOCK_STOPPED' || parsed.type === 'BLOCK_ERROR') {
+              onBlockStopped(parsed.blockId, parsed.blockName);
+            }
+
+            mainWindow.webContents.send('block-message', { ...parsed, language: 'MATLAB' });
+          } catch (err) {
+            console.error(`[MATLAB SERVER] Parse error from ${clientId}:`, err, 'Data:', line);
+          }
+        });
+      });
+
+      client.on('close', () => { 
+        console.log(`[MATLAB SERVER] Client disconnected: ${clientId}`);
+        matlabClients.delete(clientId); 
+      });
+      client.on('error', (err) => { 
+        console.error(`[MATLAB SERVER] Client error ${clientId}:`, err.message);
+        matlabClients.delete(clientId); 
+      });
+    });
+
+    matlabSocketServer.on('error', (err) => {
+      console.error(`[MATLAB SERVER] ✗ SERVER ERROR:`, err.message);
+      if (err.code === 'EADDRINUSE') {
+        console.error(`[MATLAB SERVER] ✗ Port ${matlabPort} is already in use!`);
+      }
+    });
+    
+    // FIX: Use '127.0.0.1' instead of 'localhost'.
+    // On Windows, 'localhost' resolves to ::1 (IPv6) in Node.js,
+    // but C++ blocks connect to 127.0.0.1 (IPv4) — causing ECONNREFUSED.
+    matlabSocketServer.listen(matlabPort, '127.0.0.1', () => {
+      console.log(`[MATLAB SERVER] ✓✓✓ LISTENING ON 127.0.0.1:${matlabPort} ✓✓✓`);
+      console.log(`[MATLAB SERVER] Ready to accept MATLAB block connections\n`);
+    });
+  } catch (err) {
+    console.error(`[MATLAB SERVER] ✗ Failed to create server:`, err);
+  }
+
+  // C++ Socket Server
+  console.log(`[C++ SERVER] Creating server for port ${cppPort}...`);
+  try {
+    cppSocketServer = net.createServer((client) => {
+      const clientId = `${client.remoteAddress}:${client.remotePort}`;
+      console.log(`[C++ SERVER] ✓ Client connected: ${clientId}`);
+      cppClients.set(clientId, { socket: client, buffer: '' });
+
+      client.on('data', (data) => {
+        const info = cppClients.get(clientId);
+        if (!info) return;
+        info.buffer += data.toString();
+        const lines = info.buffer.split('\n');
+        info.buffer = lines.pop();
+
+        lines.forEach(line => {
+          if (!line.trim()) return;
+          try {
+            const parsed = JSON.parse(line);
+            console.log(`[C++ SERVER] Received message from ${clientId}:`, parsed.type, `(block: ${parsed.blockName})`);
+
+            if (parsed.type === 'BLOCK_INIT' && parsed.pid && parsed.pid > 0) {
+              onBlockInit(parsed.blockId, parsed.blockName, parsed.pid, 'C++');
+            }
+
+            if (parsed.type === 'BLOCK_STOPPED' || parsed.type === 'BLOCK_ERROR') {
+              onBlockStopped(parsed.blockId, parsed.blockName);
+            }
+
+            mainWindow.webContents.send('block-message', { ...parsed, language: 'C++' });
+          } catch (err) {
+            console.error(`[C++ SERVER] Parse error from ${clientId}:`, err, 'Data:', line);
+          }
+        });
+      });
+
+      client.on('close', () => { 
+        console.log(`[C++ SERVER] Client disconnected: ${clientId}`);
+        cppClients.delete(clientId); 
+      });
+      client.on('error', (err) => { 
+        console.error(`[C++ SERVER] Client error ${clientId}:`, err.message);
+        cppClients.delete(clientId); 
+      });
+    });
+
+    cppSocketServer.on('error', (err) => {
+      console.error(`[C++ SERVER] ✗ SERVER ERROR:`, err.message);
+      if (err.code === 'EADDRINUSE') {
+        console.error(`[C++ SERVER] ✗ Port ${cppPort} is already in use!`);
+      }
+    });
+    
+    // FIX: Use '127.0.0.1' instead of 'localhost'.
+    // On Windows, 'localhost' resolves to ::1 (IPv6) in Node.js,
+    // but C++ blocks connect to 127.0.0.1 (IPv4) — causing ECONNREFUSED.
+    cppSocketServer.listen(cppPort, '127.0.0.1', () => {
+      console.log(`[C++ SERVER] ✓✓✓ LISTENING ON 127.0.0.1:${cppPort} ✓✓✓`);
+      console.log(`[C++ SERVER] Ready to accept C++ block connections\n`);
+    });
+  } catch (err) {
+    console.error(`[C++ SERVER] ✗ Failed to create server:`, err);
+  }
+  
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('  SOCKET SERVER INITIALIZATION COMPLETE');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+};
+
+const stopLanguageSocketServers = () => {
+  console.log('[SHUTDOWN] Stopping language socket servers...');
+  
+  if (matlabSocketServer) {
+    matlabClients.forEach((info) => { try { info.socket.destroy(); } catch (_) {} });
+    matlabClients.clear();
+    matlabSocketServer.close();
+    matlabSocketServer = null;
+    console.log('[SHUTDOWN] MATLAB Socket Server stopped');
+  }
+  
+  if (cppSocketServer) {
+    cppClients.forEach((info) => { try { info.socket.destroy(); } catch (_) {} });
+    cppClients.clear();
+    cppSocketServer.close();
+    cppSocketServer = null;
+    console.log('[SHUTDOWN] C++ Socket Server stopped');
+  }
+};
+
+// ============================================================
 // IPC HANDLERS
 // ============================================================
 
-ipcMain.handle('get-instance-config', async () => ({ instanceId, serverPort, matlabPort }));
-ipcMain.handle('get-app-path', async () => process.cwd());
+ipcMain.handle('get-instance-config', async () => {
+  console.log('[IPC] get-instance-config called');
+  return { instanceId, serverPort, matlabPort, cppPort };
+});
+
+ipcMain.handle('get-app-path', async () => {
+  const cwd = process.cwd();
+  console.log('[IPC] get-app-path called:', cwd);
+  return cwd;
+});
+
+ipcMain.handle('get-next-block-id', async () => {
+  const id = blockIdCounter++;
+  console.log(`[IPC] get-next-block-id called: returning ${id}`);
+  return id;
+});
 
 ipcMain.handle('read-file', async (event, filepath) => {
   try { return await fs.readFile(filepath, 'utf-8'); }
@@ -2753,6 +4197,7 @@ ipcMain.handle('ensure-dir', async (event, dirpath) => {
 });
 
 ipcMain.handle('exec-command', async (event, command, cwd) => {
+  console.log(`[IPC] exec-command: ${command.substring(0, 100)}...`);
   try {
     const { stdout, stderr } = await execAsync(command, { cwd: cwd || process.cwd(), shell: true, windowsHide: true });
     return { success: true, stdout, stderr };
@@ -2761,8 +4206,8 @@ ipcMain.handle('exec-command', async (event, command, cwd) => {
   }
 });
 
-// Start the C++ pipe server
 ipcMain.handle('start-server-with-socket', async (event, command, cwd, processName) => {
+  console.log(`[IPC] start-server-with-socket: ${processName}`);
   try {
     const child = spawn(command, [], {
       cwd: cwd || process.cwd(), shell: true, detached: false,
@@ -2774,8 +4219,8 @@ ipcMain.handle('start-server-with-socket', async (event, command, cwd, processNa
 
     runningProcesses.set(pid, { process: child, name: processName || 'unnamed', command, startTime: new Date(), isServer: true });
 
-    child.stdout.on('data', (data) => console.log(`[server] STDOUT:`, data.toString()));
-    child.stderr.on('data', (data) => console.log(`[server] STDERR:`, data.toString()));
+    child.stdout.on('data', (data) => console.log(`[${processName}] STDOUT:`, data.toString()));
+    child.stderr.on('data', (data) => console.log(`[${processName}] STDERR:`, data.toString()));
     child.on('exit', (code, signal) => {
       runningProcesses.delete(pid);
       mainWindow.webContents.send('process-output', { pid, type: 'exit', name: processName, code, signal });
@@ -2796,9 +4241,9 @@ ipcMain.handle('start-server-with-socket', async (event, command, cwd, processNa
   }
 });
 
-// Start a MATLAB block process
-// The real MATLAB PID is reported back via BLOCK_INIT socket message (see onMatlabBlockInit)
 ipcMain.handle('start-process', async (event, command, cwd, processName) => {
+  console.log(`[IPC] start-process: ${processName}`);
+  console.log(`[IPC]   Command: ${command.substring(0, 200)}...`);
   try {
     const child = spawn(command, [], {
       cwd: cwd || process.cwd(),
@@ -2816,10 +4261,11 @@ ipcMain.handle('start-process', async (event, command, cwd, processName) => {
       name: processName || 'unnamed',
       command,
       startTime: new Date(),
-      realMatlabPid: null   // filled when MATLAB sends BLOCK_INIT with its PID
+      realProcessPid: null
     });
 
-    console.log(`[${processName}] Shell PID: ${shellPid} — waiting for MATLAB to self-report its PID via BLOCK_INIT...`);
+    console.log(`[PROCESS] Started ${processName} (Shell PID: ${shellPid})`);
+    console.log(`[PROCESS]   Waiting for block to self-report via BLOCK_INIT...`);
 
     mainWindow.webContents.send('process-output', {
       pid: shellPid, type: 'started', name: processName,
@@ -2828,58 +4274,54 @@ ipcMain.handle('start-process', async (event, command, cwd, processName) => {
 
     child.stdout.on('data', (data) => {
       const output = data.toString();
-      console.log(`[${shellPid}] STDOUT:`, output);
+      console.log(`[${shellPid}/${processName}] STDOUT:`, output);
       mainWindow.webContents.send('process-output', { pid: shellPid, type: 'stdout', name: processName, data: output });
     });
 
     child.stderr.on('data', (data) => {
       const output = data.toString();
-      console.log(`[${shellPid}] STDERR:`, output);
+      console.log(`[${shellPid}/${processName}] STDERR:`, output);
       mainWindow.webContents.send('process-output', { pid: shellPid, type: 'stderr', name: processName, data: output });
     });
 
     child.on('exit', (code, signal) => {
-      console.log(`[${shellPid}] Shell exited code=${code}`);
-      // If MATLAB already reported its PID, unregister it
-      const realPid = runningProcesses.get(shellPid)?.realMatlabPid;
+      console.log(`[PROCESS] ${processName} (Shell PID: ${shellPid}) exited with code ${code}`);
+      const realPid = runningProcesses.get(shellPid)?.realProcessPid;
       if (realPid) {
         unregisterPidWithServer(realPid, processName || 'unnamed');
       }
-      shellToMatlabPid.delete(shellPid);
+      shellToProcessPid.delete(shellPid);
       runningProcesses.delete(shellPid);
       mainWindow.webContents.send('process-output', { pid: shellPid, type: 'exit', name: processName, code, signal });
     });
 
     child.on('error', (err) => {
-      console.error(`[${shellPid}] Process error:`, err);
-      const realPid = runningProcesses.get(shellPid)?.realMatlabPid;
+      console.error(`[PROCESS] ${processName} (Shell PID: ${shellPid}) error:`, err);
+      const realPid = runningProcesses.get(shellPid)?.realProcessPid;
       if (realPid) unregisterPidWithServer(realPid, processName || 'unnamed');
-      shellToMatlabPid.delete(shellPid);
+      shellToProcessPid.delete(shellPid);
       runningProcesses.delete(shellPid);
       mainWindow.webContents.send('process-output', { pid: shellPid, type: 'error', name: processName, data: err.message });
     });
 
     return { success: true, pid: shellPid };
   } catch (err) {
-    console.error('Failed to start process:', err);
+    console.error(`[PROCESS] Failed to start ${processName}:`, err);
     return { success: false, error: err.message };
   }
 });
 
-// Kill a specific block — unregisters real PID from pipe server first
 ipcMain.handle('kill-process', async (event, pid) => {
   try {
     const processInfo = runningProcesses.get(pid);
     if (!processInfo) return { success: false, error: 'Process not found' };
 
-    // Unregister real MATLAB PID so pipe server doesn't double-kill
-    const realPid = processInfo.realMatlabPid || shellToMatlabPid.get(pid);
+    const realPid = processInfo.realProcessPid || shellToProcessPid.get(pid);
     if (realPid) unregisterPidWithServer(realPid, processInfo.name);
-    shellToMatlabPid.delete(pid);
+    shellToProcessPid.delete(pid);
 
-    // Also remove from blockId map
-    for (const [bId, mPid] of blockIdToMatlabPid.entries()) {
-      if (mPid === realPid) { blockIdToMatlabPid.delete(bId); break; }
+    for (const [bId, mPid] of blockIdToProcessPid.entries()) {
+      if (mPid === realPid) { blockIdToProcessPid.delete(bId); break; }
     }
 
     await killProcessTree(pid);
@@ -2897,23 +4339,23 @@ ipcMain.handle('kill-process', async (event, pid) => {
 ipcMain.handle('get-running-processes', async () => {
   const processes = Array.from(runningProcesses.entries()).map(([pid, info]) => ({
     pid,
-    realMatlabPid: info.realMatlabPid || null,
+    realProcessPid: info.realProcessPid || null,
     name: info.name,
     command: info.command,
-    startTime: info.startTime
+    startTime: info.startTime,
+    language: info.language || 'unknown'
   }));
   return { success: true, processes };
 });
 
-// Kill all - unregister all real MATLAB PIDs before killing
 ipcMain.handle('kill-all-processes', async () => {
   for (const [shellPid, info] of runningProcesses.entries()) {
-    if (!info.isServer && info.realMatlabPid) {
-      unregisterPidWithServer(info.realMatlabPid, info.name);
+    if (!info.isServer && info.realProcessPid) {
+      unregisterPidWithServer(info.realProcessPid, info.name);
     }
   }
-  shellToMatlabPid.clear();
-  blockIdToMatlabPid.clear();
+  shellToProcessPid.clear();
+  blockIdToProcessPid.clear();
   await cleanupAllProcesses();
   return { success: true, killedCount: runningProcesses.size };
 });
@@ -2929,91 +4371,41 @@ ipcMain.handle('send-to-server', async (event, message) => {
 });
 
 // ============================================================
-// MATLAB SOCKET SERVER
-// Receives messages from MATLAB blocks including BLOCK_INIT with self-reported PID
-// ============================================================
-const startMatlabSocketServer = () => {
-  matlabSocketServer = net.createServer((client) => {
-    const clientId = `${client.remoteAddress}:${client.remotePort}`;
-    console.log(`[MATLAB Socket] Client connected: ${clientId}`);
-    matlabClients.set(clientId, { socket: client, buffer: '' });
-
-    client.on('data', (data) => {
-      const info = matlabClients.get(clientId);
-      if (!info) return;
-      info.buffer += data.toString();
-      const lines = info.buffer.split('\n');
-      info.buffer = lines.pop();
-
-      lines.forEach(line => {
-        if (!line.trim()) return;
-        try {
-          const parsed = JSON.parse(line);
-          console.log('[MATLAB Socket] Received:', parsed);
-
-          // PRIMARY PID REGISTRATION: MATLAB includes its own PID in BLOCK_INIT
-          if (parsed.type === 'BLOCK_INIT' && parsed.pid && parsed.pid > 0) {
-            onMatlabBlockInit(parsed.blockId, parsed.blockName, parsed.pid);
-          }
-
-          // Unregister when block stops cleanly
-          if (parsed.type === 'BLOCK_STOPPED' || parsed.type === 'BLOCK_ERROR') {
-            onMatlabBlockStopped(parsed.blockId, parsed.blockName);
-          }
-
-          // Forward all messages to renderer as before
-          mainWindow.webContents.send('matlab-message', parsed);
-        } catch (err) {
-          console.error('[MATLAB Socket] Parse error:', err, 'Data:', line);
-        }
-      });
-    });
-
-    client.on('close', () => { matlabClients.delete(clientId); });
-    client.on('error', () => { matlabClients.delete(clientId); });
-  });
-
-  matlabSocketServer.on('error', (err) => console.error('[MATLAB Socket Server] Error:', err));
-  matlabSocketServer.listen(matlabPort, () => console.log(`[MATLAB Socket Server] Listening on port ${matlabPort}`));
-};
-
-const stopMatlabSocketServer = () => {
-  if (matlabSocketServer) {
-    matlabClients.forEach((info) => { try { info.socket.destroy(); } catch (_) {} });
-    matlabClients.clear();
-    matlabSocketServer.close();
-    matlabSocketServer = null;
-  }
-};
-
-// ============================================================
 // APP LIFECYCLE
 // ============================================================
+
 app.whenReady().then(() => {
+  console.log('[APP] Electron app is ready');
   createWindow();
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  app.on('activate', () => { 
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(); 
+  });
 });
 
 app.on('window-all-closed', async () => {
+  console.log('[APP] All windows closed');
   await cleanupAllProcesses();
   if (serverSocket) { serverSocket.destroy(); serverSocket = null; }
-  stopMatlabSocketServer();
+  stopLanguageSocketServers();
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', async () => {
+  console.log('[APP] App quitting...');
   await cleanupAllProcesses();
   if (serverSocket) { serverSocket.destroy(); serverSocket = null; }
-  stopMatlabSocketServer();
+  stopLanguageSocketServers();
 });
 
 process.on('SIGINT', async () => {
+  console.log('[APP] SIGINT received');
   await cleanupAllProcesses();
   if (serverSocket) { serverSocket.destroy(); serverSocket = null; }
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
+  console.log('[APP] SIGTERM received');
   await cleanupAllProcesses();
   if (serverSocket) { serverSocket.destroy(); serverSocket = null; }
   process.exit(0);
@@ -3025,6 +4417,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   // Instance configuration
   getInstanceConfig: () => ipcRenderer.invoke('get-instance-config'),
+  getNextBlockId: () => ipcRenderer.invoke('get-next-block-id'),
   
   // File operations
   readFile: (filepath) => ipcRenderer.invoke('read-file', filepath),
@@ -3053,7 +4446,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform information
   getPlatform: () => process.platform,
   
-  // Listen to process output (for MATLAB blocks)
+  // Listen to process output
   onProcessOutput: (callback) => {
     const subscription = (event, data) => callback(data);
     ipcRenderer.on('process-output', subscription);
@@ -3067,11 +4460,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('server-message', subscription);
   },
   
-  // Listen to MATLAB block messages via socket
-  onMatlabMessage: (callback) => {
+  // Listen to block messages (MATLAB/C++/Python) via language-specific sockets
+  onBlockMessage: (callback) => {
     const subscription = (event, data) => callback(data);
-    ipcRenderer.on('matlab-message', subscription);
-    return () => ipcRenderer.removeListener('matlab-message', subscription);
+    ipcRenderer.on('block-message', subscription);
+    return () => ipcRenderer.removeListener('block-message', subscription);
   },
   
   // Listen to socket connection status
@@ -3083,10 +4476,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   removeProcessOutputListener: () => ipcRenderer.removeAllListeners('process-output'),
   removeServerMessageListener: () => ipcRenderer.removeAllListeners('server-message'),
-  removeMatlabMessageListener: () => ipcRenderer.removeAllListeners('matlab-message'),
+  removeBlockMessageListener: () => ipcRenderer.removeAllListeners('block-message'),
   removeServerSocketStatusListener: () => ipcRenderer.removeAllListeners('server-socket-status')
 });
-
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\renderer.jsx ---
 /**
@@ -4890,7 +6282,8 @@ export const useCanvasInteraction = (GRID_SIZE) => {
 
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\hooks\useFileOperations.js ---
-import { parseMatlabBlock, calculatePortPositions, BLOCK_WIDTH, BLOCK_HEIGHT, GRID_SIZE } from '../utils/blockUtils';
+import { parseMatlabBlock } from '../utils/blockUtils';
+import { parseCppBlock, isCppBlock } from '../utils/cppBlockUtils';
 
 export const useFileOperations = ({
   blocks,
@@ -4904,7 +6297,9 @@ export const useFileOperations = ({
   const handleFileUpload = async () => {
     try {
       const filepaths = await window.electronAPI.selectFile([
-        { name: 'MATLAB Files', extensions: ['m'] }
+        { name: 'Block Files', extensions: ['m', 'cpp'] },
+        { name: 'MATLAB Files', extensions: ['m'] },
+        { name: 'C++ Files', extensions: ['cpp'] }
       ]);
       
       if (!filepaths) return;
@@ -4921,17 +6316,38 @@ export const useFileOperations = ({
           addLog('info', `Reading file: ${filepath}`);
           const content = await window.electronAPI.readFile(filepath);
           const fileName = filepath.split(/[\\/]/).pop();
+          const fileExt = fileName.split('.').pop().toLowerCase();
           
-          addLog('info', `Parsing block: ${fileName}`);
-          const blockData = parseMatlabBlock(content, fileName);
+          let blockData;
+          
+          // Detect language and parse accordingly
+          if (fileExt === 'm') {
+            addLog('info', `Parsing MATLAB block: ${fileName}`);
+            blockData = parseMatlabBlock(content, fileName);
+            blockData.language = 'matlab';
+          } else if (fileExt === 'cpp') {
+            if (isCppBlock(content)) {
+              addLog('info', `Parsing C++ block: ${fileName}`);
+              blockData = parseCppBlock(content, fileName);
+              blockData.language = 'cpp';
+            } else {
+              throw new Error('Not a valid C++ block - missing required headers');
+            }
+          } else {
+            addLog('warning', `Unsupported file type: ${fileExt}`);
+            continue;
+          }
           
           if (blocks.some(b => b.name === blockData.name) || newBlocks.some(b => b.name === blockData.name)) {
             addLog('warning', `Skipping duplicate block: ${blockData.name}`);
             continue;
           }
 
+          // Use safe block ID from main process
+          const blockId = await window.electronAPI.getNextBlockId();
+          
           const newBlock = {
-            id: Date.now() + importedCount * 100,
+            id: blockId,
             ...blockData,
             x: snapToGrid(100),
             y: snapToGrid(100 + ((blocks.length + importedCount) * 30)),
@@ -4940,6 +6356,7 @@ export const useFileOperations = ({
 
           newBlocks.push(newBlock);
           importedCount++;
+          addLog('success', `Imported ${blockData.language.toUpperCase()} block: ${blockData.name} (ID: ${blockId})`);
         } catch (error) {
           addLog('error', `Failed to import ${filepath.split(/[\\/]/).pop()}: ${error.message}`);
         }
@@ -4959,7 +6376,7 @@ export const useFileOperations = ({
   const handleSaveDiagram = async () => {
     try {
       const diagram = {
-        version: '1.0',
+        version: '2.0',
         blocks: blocks,
         connections: connections,
         timestamp: new Date().toISOString()
@@ -4986,7 +6403,6 @@ export const useFileOperations = ({
       
       if (!filepaths || filepaths.length === 0) return;
       
-      // selectFile returns an array, so take the first file
       const filepath = Array.isArray(filepaths) ? filepaths[0] : filepaths;
       
       const content = await window.electronAPI.readFile(filepath);
@@ -5414,162 +6830,158 @@ export const useServerOperations = ({
   setIsStartingServer,
   addLog
 }) => {
-  const handleStartServer = async () => {
-    if (!projectDir) {
-      alert('Loading project directory...');
-      return;
+
+  const getBlockLanguagePort = (block, instanceConfig) => {
+    if (block.language === 'cpp') return instanceConfig.cppPort;
+    if (block.language === 'matlab') return instanceConfig.matlabPort;
+    return instanceConfig.matlabPort;
+  };
+
+  const buildBlockArgs = (block, connections) => {
+    const shortPipes = connections.map((_, i) => `P${i + 1}`);
+
+    if (block.language === 'matlab') {
+      const functionName = block.fileName.replace('.m', '');
+      const inputConns = connections.filter(c => c.toBlock === block.id).sort((a, b) => a.toPort - b.toPort);
+      const outputConns = connections.filter(c => c.fromBlock === block.id).sort((a, b) => a.fromPort - b.fromPort);
+      const args = [];
+      for (let i = 0; i < block.inputs; i++) {
+        const conn = inputConns.find(c => c.toPort === i);
+        if (conn) args.push(`'${shortPipes[connections.indexOf(conn)]}'`);
+        else throw new Error(`Block ${block.name} input ${i} is not connected`);
+      }
+      for (let i = 0; i < block.outputs; i++) {
+        const conn = outputConns.find(c => c.fromPort === i);
+        if (conn) args.push(`'${shortPipes[connections.indexOf(conn)]}'`);
+        else throw new Error(`Block ${block.name} output ${i} is not connected`);
+      }
+      return { type: 'matlab', functionCall: `${functionName}(${args.join(', ')})` };
     }
 
-    if (!instanceConfig) {
-      alert('Instance configuration not loaded...');
-      return;
+    if (block.language === 'cpp') {
+      const exeName = block.fileName.replace('.cpp', '.exe');
+      const inputConns = connections.filter(c => c.toBlock === block.id).sort((a, b) => a.toPort - b.toPort);
+      const outputConns = connections.filter(c => c.fromBlock === block.id).sort((a, b) => a.fromPort - b.fromPort);
+      const args = [];
+      for (let i = 0; i < block.inputs; i++) {
+        const conn = inputConns.find(c => c.toPort === i);
+        if (conn) args.push(shortPipes[connections.indexOf(conn)]);
+        else throw new Error(`Block ${block.name} input ${i} is not connected`);
+      }
+      for (let i = 0; i < block.outputs; i++) {
+        const conn = outputConns.find(c => c.fromPort === i);
+        if (conn) args.push(shortPipes[connections.indexOf(conn)]);
+        else throw new Error(`Block ${block.name} output ${i} is not connected`);
+      }
+      return { type: 'cpp', exeName, args };
     }
+
+    throw new Error(`Unsupported block language: ${block.language}`);
+  };
+
+  const buildMatlabBat = (block, functionCall, instanceConfig, languagePort) => {
+    return [
+      `@echo off`,
+      `set BLOCK_ID=${block.id}`,
+      `set INSTANCE_ID=${instanceConfig.instanceId}`,
+      `set MATLAB_PORT=${languagePort}`,
+      `matlab -batch "cd('${projectDir}/matlab_blocks'); addpath('${projectDir}/server'); addpath('${projectDir}/matlab_blocks/core'); ${functionCall}"`,
+    ].join('\r\n');
+  };
+
+  // ─── Start Server ──────────────────────────────────────────────────────────
+  const handleStartServer = async () => {
+    if (!projectDir) { alert('Loading project directory...'); return; }
+    if (!instanceConfig) { alert('Instance configuration not loaded...'); return; }
 
     setIsStartingServer(true);
-
     try {
+      addLog('info', `Project directory: ${projectDir}`);
+      addLog('info', `Instance config: ${JSON.stringify(instanceConfig)}`);
       addLog('info', 'Validating pipeline...');
-      
-      if (blocks.length < 2) {
-        throw new Error('Need at least 2 blocks (Source and Sink)');
-      }
-      
-      if (connections.length === 0) {
-        throw new Error('No connections found');
-      }
+      if (blocks.length < 2) throw new Error('Need at least 2 blocks');
+      if (connections.length === 0) throw new Error('No connections found');
 
-      addLog('info', 'Creating directories...');
       await window.electronAPI.ensureDir(`${projectDir}/server`);
       await window.electronAPI.ensureDir(`${projectDir}/matlab_blocks`);
+      await window.electronAPI.ensureDir(`${projectDir}/matlab_blocks/core`);
+      await window.electronAPI.ensureDir(`${projectDir}/cpp_blocks`);
+      await window.electronAPI.ensureDir(`${projectDir}/cpp_blocks/bin`);
 
-      // Check if MEX file exists
       const platform = await window.electronAPI.getPlatform();
-      const mexExtension = platform === 'win32' ? 'mexw64' : (platform === 'darwin' ? 'mexmaci64' : 'mexa64');
-      const mexPath = `${projectDir}/server/pipeline_mex.${mexExtension}`;
-      
-      let mexExists = false;
+      const mexExt = platform === 'win32' ? 'mexw64' : (platform === 'darwin' ? 'mexmaci64' : 'mexa64');
       try {
-        await window.electronAPI.readFile(mexPath);
-        mexExists = true;
+        await window.electronAPI.readFile(`${projectDir}/server/pipeline_mex.${mexExt}`);
         addLog('success', 'Found existing MEX file - skipping compilation');
       } catch (e) {
-        addLog('info', 'MEX file not found - will compile');
+        try { await window.electronAPI.readFile(`${projectDir}/server/pipeline_mex.cpp`); }
+        catch (e2) { throw new Error('pipeline_mex.cpp not found in server/ folder.'); }
+        addLog('info', 'Compiling MEX file...');
+        const r = await window.electronAPI.execCommand('matlab -batch "mex pipeline_mex.cpp"', `${projectDir}/server`);
+        if (!r.success) throw new Error(`MEX compilation failed:\n${r.stderr || r.error}`);
+        addLog('success', 'MEX compiled successfully');
       }
 
-      if (!mexExists) {
-        const cppSourcePath = `${projectDir}/server/pipeline_mex.cpp`;
-        let sourceExists = false;
-        try {
-          await window.electronAPI.readFile(cppSourcePath);
-          sourceExists = true;
-        } catch (e) {
-          throw new Error('pipeline_mex.cpp not found in server/ folder. Please add the pipeline_mex.cpp file to the server/ directory.');
-        }
-
-        if (sourceExists) {
-          addLog('info', 'Found pipeline_mex.cpp - compiling MEX file...');
-          const mexResult = await window.electronAPI.execCommand(
-            'matlab -batch "mex pipeline_mex.cpp"',
-            `${projectDir}/server`
-          );
-
-          if (!mexResult.success) {
-            throw new Error(`MEX compilation failed:\n${mexResult.stderr || mexResult.error}\n\nMake sure MATLAB is installed and in your PATH.`);
+      const cppBlocks = blocks.filter(b => b.language === 'cpp');
+      if (cppBlocks.length > 0) {
+        addLog('info', `Found ${cppBlocks.length} C++ block(s) to compile...`);
+        for (const block of cppBlocks) {
+          addLog('info', `Checking ${block.name} | startWithAll=${block.startWithAll}`);
+          const exeName = block.fileName.replace('.cpp', '.exe');
+          const exePath = `${projectDir}/cpp_blocks/bin/${exeName}`;
+          
+          try {
+            await window.electronAPI.readFile(exePath);
+            addLog('success', `Found existing ${exeName} in bin/ - skipping`);
+          } catch (e) {
+            addLog('info', `Compiling ${block.fileName} to bin/...`);
+            await window.electronAPI.writeFile(`${projectDir}/cpp_blocks/${block.fileName}`, block.code);
+            const r = await window.electronAPI.execCommand(
+              `g++ -o bin/${exeName} ${block.fileName} -lws2_32 -O2 -std=c++17`,
+              `${projectDir}/cpp_blocks`
+            );
+            if (!r.success) throw new Error(`C++ compilation failed for ${block.fileName}:\n${r.stderr || r.error}`);
+            addLog('success', `Compiled ${block.fileName} → bin/${exeName}`);
           }
-          addLog('success', 'MEX compiled successfully');
         }
       }
 
-      // Check if pipe_server.exe exists
-      const serverPath = `${projectDir}/server/pipe_server.exe`;
-      let serverExists = false;
       try {
-        await window.electronAPI.readFile(serverPath);
-        serverExists = true;
+        await window.electronAPI.readFile(`${projectDir}/server/pipe_server.exe`);
         addLog('success', 'Found existing pipe server - skipping compilation');
       } catch (e) {
-        addLog('info', 'Pipe server not found - checking for source...');
+        try { await window.electronAPI.readFile(`${projectDir}/server/pipe_server.cpp`); }
+        catch (e2) { throw new Error('pipe_server.cpp not found in server/ folder.'); }
+        addLog('info', 'Compiling pipe server...');
+        const r = await window.electronAPI.execCommand('g++ -o pipe_server.exe pipe_server.cpp -lws2_32 -O2', `${projectDir}/server`);
+        if (!r.success) throw new Error(`Pipe server compilation failed:\n${r.stderr || r.error}`);
+        addLog('success', 'Pipe server compiled');
       }
 
-      if (!serverExists) {
-        const cppSourcePath = `${projectDir}/server/pipe_server.cpp`;
-        let sourceExists = false;
-        try {
-          await window.electronAPI.readFile(cppSourcePath);
-          sourceExists = true;
-        } catch (e) {
-          throw new Error('pipe_server.cpp not found in server/ folder. Please add the pipe_server.cpp file to the server/ directory.');
-        }
-
-        if (sourceExists) {
-          addLog('info', 'Found pipe_server.cpp - compiling with socket support...');
-          const cppResult = await window.electronAPI.execCommand(
-            'g++ -o pipe_server.exe pipe_server.cpp -lws2_32 -O2',
-            `${projectDir}/server`
-          );
-
-          if (!cppResult.success) {
-            throw new Error(`Pipe server compilation failed:\n${cppResult.stderr || cppResult.error}\n\nMake sure g++ is installed and in your PATH.`);
-          }
-          addLog('success', 'Pipe server compiled successfully with socket support');
-        }
-      }
-
-      // Build server command with INSTANCE-SPECIFIC parameters
       const sortedBlocks = topologicalSort(blocks, connections);
-      const instanceId = instanceConfig.instanceId;
-      const serverPort = instanceConfig.serverPort;
-      
-      // Instance-specific pipe names
-      const pipes = connections.map((_, i) => `Instance_${instanceId}_P${i + 1}`);
-      
+      const { instanceId, serverPort } = instanceConfig;
+      const instancePipes = connections.map((_, i) => `Instance_${instanceId}_P${i + 1}`);
+
       let serverCmd = `pipe_server.exe ${connections.length} ${serverPort}`;
-      
-      // BATCH PROCESSING: Use buffer size from output port (includes length header + all packets)
       connections.forEach((conn, i) => {
         const fromBlock = sortedBlocks.find(b => b.id === conn.fromBlock);
-        
-        let size = 67108864; // default 64MB
-        if (fromBlock && fromBlock.outputBufferSizes && fromBlock.outputBufferSizes[conn.fromPort]) {
-          // Use the TOTAL buffer size (length header + packet_size × batch_size)
+        let size = 67108864;
+        if (fromBlock?.outputBufferSizes?.[conn.fromPort]) {
           size = fromBlock.outputBufferSizes[conn.fromPort];
-          
-          const packetSize = fromBlock.outputPacketSizes[conn.fromPort];
-          const batchSize = fromBlock.outputBatchSizes[conn.fromPort];
-          const lengthBytes = fromBlock.outputLengthBytes[conn.fromPort];
-          
-          addLog('info', 
-            `Pipe ${i}: ${fromBlock.name} port ${conn.fromPort} - ` +
-            `${packetSize}×${batchSize} (${lengthBytes}B header + ${(size - lengthBytes) / 1024}KB data = ${(size / 1024).toFixed(2)}KB total)`
-          );
+          addLog('info', `Pipe ${i}: ${fromBlock.name}[${conn.fromPort}] ${fromBlock.outputPacketSizes[conn.fromPort]}×${fromBlock.outputBatchSizes[conn.fromPort]} = ${(size / 1024).toFixed(1)}KB`);
         }
-        
-        serverCmd += ` ${pipes[i]} ${size}`;
+        serverCmd += ` ${instancePipes[i]} ${size}`;
       });
 
-      addLog('info', `Starting instance-specific pipe server...`);
-      addLog('info', `Instance ID: ${instanceId}`);
-      addLog('info', `Server Port: ${serverPort}`);
-      addLog('info', `Command: ${serverCmd}`);
-      
-      const serverProc = await window.electronAPI.startServerWithSocket(
-        serverCmd,
-        `${projectDir}/server`,
-        'server'
-      );
-
-      if (!serverProc.success) {
-        throw new Error('Failed to start server: ' + serverProc.error);
-      }
+      addLog('info', `Starting pipe server: ${serverCmd}`);
+      const serverProc = await window.electronAPI.startServerWithSocket(serverCmd, `${projectDir}/server`, 'server');
+      if (!serverProc.success) throw new Error('Failed to start server: ' + serverProc.error);
 
       setServerRunning(true);
-      setBlockProcesses(prev => ({ 
-        ...prev, 
-        server: { pid: serverProc.pid, status: 'running', name: 'server' } 
-      }));
+      setBlockProcesses(prev => ({ ...prev, server: { pid: serverProc.pid, status: 'running', name: 'server' } }));
       addLog('success', `Pipe server started (PID: ${serverProc.pid}, Port: ${serverPort})`);
       addLog('info', 'Waiting for socket connection...');
-      
+
     } catch (err) {
       addLog('error', `Server start failed: ${err.message}`);
       alert('Failed to start server:\n' + err.message);
@@ -5578,62 +6990,18 @@ export const useServerOperations = ({
     }
   };
 
-  const buildBlockCommand = (block, connections, instanceConfig) => {
-    const instanceId = instanceConfig.instanceId;
-    const matlabPort = instanceConfig.matlabPort;
-    
-    // Instance-specific pipe names
-    const pipes = connections.map((_, i) => `Instance_${instanceId}_P${i + 1}`);
-    const functionName = block.fileName.replace('.m', '');
-    
-    const inputConnections = connections.filter(c => c.toBlock === block.id)
-      .sort((a, b) => a.toPort - b.toPort);
-    
-    const outputConnections = connections.filter(c => c.fromBlock === block.id)
-      .sort((a, b) => a.fromPort - b.fromPort);
-    
-    const args = [];
-    
-    for (let i = 0; i < block.inputs; i++) {
-      const conn = inputConnections.find(c => c.toPort === i);
-      if (conn) {
-        const pipeIndex = connections.indexOf(conn);
-        args.push(`'${pipes[pipeIndex]}'`);
-      } else {
-        throw new Error(`Block ${block.name} input ${i} is not connected`);
-      }
-    }
-    
-    for (let i = 0; i < block.outputs; i++) {
-      const conn = outputConnections.find(c => c.fromPort === i);
-      if (conn) {
-        const pipeIndex = connections.indexOf(conn);
-        args.push(`'${pipes[pipeIndex]}'`);
-      } else {
-        throw new Error(`Block ${block.name} output ${i} is not connected`);
-      }
-    }
-    
-    const matlabCmd = `${functionName}(${args.join(', ')})`;
-    
-    return `addpath('${projectDir}/matlab_blocks/core'); ${matlabCmd}`;
-  };
-
   const waitForBlockReady = (blockId, blockName, setBlockProcesses, timeout = 30000) => {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
-      let isReady = false;
-      
-      const checkInterval = setInterval(() => {
+      let resolved = false;
+      const iv = setInterval(() => {
         setBlockProcesses(prev => {
           const proc = prev[blockId];
-          if (proc && proc.status === 'running' && !isReady) {
-            isReady = true;
-            clearInterval(checkInterval);
-            resolve(true);
-          } else if (Date.now() - startTime > timeout && !isReady) {
-            clearInterval(checkInterval);
-            reject(new Error(`Timeout waiting for ${blockName} to become ready`));
+          if (proc?.status === 'running' && !resolved) {
+            resolved = true; clearInterval(iv); resolve(true);
+          } else if (Date.now() - startTime > timeout && !resolved) {
+            resolved = true; clearInterval(iv);
+            reject(new Error(`Timeout waiting for ${blockName}`));
           }
           return prev;
         });
@@ -5641,95 +7009,95 @@ export const useServerOperations = ({
     });
   };
 
+  // ─── Start all auto-start blocks ──────────────────────────────────────────
   const handleStart = async () => {
-    if (!projectDir) {
-      alert('Loading project directory...');
-      return;
-    }
-
-    if (!instanceConfig) {
-      alert('Instance configuration not loaded...');
-      return;
-    }
+    if (!projectDir) { alert('Loading project directory...'); return; }
+    if (!instanceConfig) { alert('Instance configuration not loaded...'); return; }
 
     try {
-      addLog('info', '========================================');
-      addLog('info', 'Starting blocks sequentially (waiting for each to be ready)...');
-      addLog('info', '========================================');
-      
+      addLog('info', '=== STARTING BLOCK SEQUENCE ===');
+
       for (const block of blocks) {
-        await window.electronAPI.writeFile(
-          `${projectDir}/matlab_blocks/${block.fileName}`,
-          block.code
-        );
+        if (block.language === 'matlab') await window.electronAPI.writeFile(`${projectDir}/matlab_blocks/${block.fileName}`, block.code);
+        else if (block.language === 'cpp') await window.electronAPI.writeFile(`${projectDir}/cpp_blocks/${block.fileName}`, block.code);
       }
 
       const sortedBlocks = topologicalSort(blocks, connections);
       const blocksToStart = sortedBlocks.filter(b => b.startWithAll);
-      
+      addLog('info', `Blocks to start: ${blocksToStart.map(b => b.name).join(', ')}`);
+
+      const platform = await window.electronAPI.getPlatform();
+
       let startedCount = 0;
       let skippedCount = 0;
 
       for (let i = 0; i < sortedBlocks.length; i++) {
         const block = sortedBlocks[i];
-        
+        addLog('info', `Block ${i + 1}/${sortedBlocks.length}: ${block.name} (startWithAll=${block.startWithAll})`);
+
         if (!block.startWithAll) {
-          addLog('info', `Skipping ${block.name} (startWithAll=false)`);
+          addLog('info', `Skipping ${block.name}`);
           skippedCount++;
           continue;
         }
 
         try {
-          const matlabCmd = buildBlockCommand(block, connections, instanceConfig);
-          
-          const currentBlockNum = startedCount + 1;
-          const totalBlocks = blocksToStart.length;
-          addLog('info', `[${currentBlockNum}/${totalBlocks}] Starting ${block.name}...`);
-          
-          const platform = await window.electronAPI.getPlatform();
-          
-          // Pass BOTH block ID, instance ID, and MATLAB port as environment variables
-          const envCmd = platform === 'win32' 
-            ? `set BLOCK_ID=${block.id} && set INSTANCE_ID=${instanceConfig.instanceId} && set MATLAB_PORT=${instanceConfig.matlabPort} && `
-            : `export BLOCK_ID=${block.id} && export INSTANCE_ID=${instanceConfig.instanceId} && export MATLAB_PORT=${instanceConfig.matlabPort} && `;
-          
-          const fullCommand = `${envCmd}matlab -batch "cd('${projectDir}/matlab_blocks'); addpath('${projectDir}/server'); ${matlabCmd}"`;
-          
-          const procResult = await window.electronAPI.startProcess(
-            fullCommand,
-            projectDir,
-            block.name
-          );
+          const languagePort = getBlockLanguagePort(block, instanceConfig);
+          addLog('info', `[${startedCount + 1}/${blocksToStart.length}] Starting ${block.name} [${block.language?.toUpperCase()}] → port ${languagePort}`);
 
+          const parsed = buildBlockArgs(block, connections);
+          let fullCommand;
+
+          if (parsed.type === 'cpp') {
+            const { exeName, args } = parsed;
+            const exePath = `${projectDir}\\cpp_blocks\\bin\\${exeName}`;
+            
+            // FIX: Build args string carefully - no extra spaces
+            const argsString = args.join(' ');
+            
+            // Direct command with environment variables - proper quoting
+            fullCommand = `cmd /C "set BLOCK_ID=${block.id}&& set INSTANCE_ID=${instanceConfig.instanceId}&& set CPP_PORT=${languagePort}&& "${exePath}" ${argsString}"`;
+            
+            addLog('info', `Direct launch: "${exePath}" ${argsString}`);
+          } else {
+            const { functionCall } = parsed;
+            if (platform === 'win32') {
+              const batContent = buildMatlabBat(block, functionCall, instanceConfig, languagePort);
+              const batPath = `${projectDir}\\matlab_blocks\\launch_${block.id}.bat`;
+              await window.electronAPI.writeFile(batPath, batContent);
+              fullCommand = `cmd /C "${batPath}"`;
+            } else {
+              fullCommand = `BLOCK_ID=${block.id} INSTANCE_ID=${instanceConfig.instanceId} MATLAB_PORT=${languagePort} matlab -batch "cd('${projectDir}/matlab_blocks'); addpath('${projectDir}/server'); addpath('${projectDir}/matlab_blocks/core'); ${functionCall}"`;
+            }
+          }
+
+          addLog('info', `Launch: ${fullCommand}`);
+
+          const procResult = await window.electronAPI.startProcess(fullCommand, projectDir, block.name);
           if (procResult.success) {
             setBlockProcesses(prev => ({
               ...prev,
-              [block.id]: {
-                pid: procResult.pid,
-                status: 'starting',
-                name: block.name
-              }
+              [block.id]: { pid: procResult.pid, status: 'starting', name: block.name, language: block.language || 'matlab' }
             }));
-            addLog('info', `${block.name} process launched (PID: ${procResult.pid}), waiting for BLOCK_READY...`);
-            
+            addLog('info', `${block.name} launched (PID: ${procResult.pid}), waiting for BLOCK_READY...`);
             try {
               await waitForBlockReady(block.id, block.name, setBlockProcesses);
               addLog('success', `✓ ${block.name} is READY`);
               startedCount++;
             } catch (err) {
-              addLog('error', `✗ ${block.name} failed to become ready: ${err.message}`);
+              addLog('error', `✗ ${block.name} failed: ${err.message}`);
               addLog('warning', 'Continuing with next block...');
             }
           } else {
-            addLog('error', `Failed to start ${block.name}: ${procResult.error}`);
+            addLog('error', `Failed to launch ${block.name}: ${procResult.error}`);
           }
         } catch (err) {
-          addLog('error', `Failed to start ${block.name}: ${err.message}`);
+          addLog('error', `Error starting ${block.name}: ${err.message}`);
         }
       }
 
       addLog('info', '========================================');
-      addLog('success', `Sequential startup complete: ${startedCount} started, ${skippedCount} skipped`);
+      addLog('success', `Startup complete: ${startedCount} started, ${skippedCount} skipped`);
       addLog('info', '========================================');
     } catch (err) {
       addLog('error', `Block start failed: ${err.message}`);
@@ -5739,46 +7107,22 @@ export const useServerOperations = ({
 
   const handleStop = async (blockProcesses, setBlockMetrics) => {
     addLog('info', 'Stopping all blocks with startWithAll=true...');
-    
     const blocksToStop = blocks.filter(b => b.startWithAll);
-    
     for (const block of blocksToStop) {
-      const processInfo = blockProcesses[block.id];
-      if (processInfo) {
-        addLog('info', `Stopping ${block.name} (PID: ${processInfo.pid})...`);
-        const result = await window.electronAPI.killProcess(processInfo.pid);
-        if (result.success) {
-          addLog('success', `${block.name} stopped`);
-        } else {
-          addLog('error', `Failed to stop ${block.name}: ${result.error}`);
-        }
+      const info = blockProcesses[block.id];
+      if (info) {
+        const r = await window.electronAPI.killProcess(info.pid);
+        if (r.success) addLog('success', `${block.name} stopped`);
+        else addLog('error', `Failed to stop ${block.name}: ${r.error}`);
       }
     }
-    
-    setBlockProcesses(prev => {
-      const newProcs = { ...prev };
-      blocksToStop.forEach(block => {
-        delete newProcs[block.id];
-      });
-      return newProcs;
-    });
-    
-    setBlockMetrics(prev => {
-      const newMetrics = { ...prev };
-      blocksToStop.forEach(block => {
-        delete newMetrics[block.id];
-      });
-      return newMetrics;
-    });
-    
+    setBlockProcesses(prev => { const n = { ...prev }; blocksToStop.forEach(b => delete n[b.id]); return n; });
+    setBlockMetrics(prev => { const n = { ...prev }; blocksToStop.forEach(b => delete n[b.id]); return n; });
     addLog('success', 'All auto-start blocks stopped');
   };
 
   const handleTerminate = async (setBlockMetrics) => {
-    addLog('info', 'Terminating all processes...');
-    
     const result = await window.electronAPI.killAllProcesses();
-    
     if (result.success) {
       addLog('success', `Terminated ${result.killedCount} process(es)`);
       setBlockProcesses({});
@@ -5790,45 +7134,49 @@ export const useServerOperations = ({
   };
 
   const handleStartBlock = async (block, blockProcesses) => {
-    if (!instanceConfig) {
-      addLog('error', 'Instance configuration not loaded');
-      return;
-    }
+    if (!instanceConfig) { addLog('error', 'Instance configuration not loaded'); return; }
+    if (blockProcesses[block.id]) { addLog('warning', `${block.name} is already running`); return; }
 
-    if (blockProcesses[block.id]) {
-      addLog('warning', `${block.name} is already running`);
-      return;
-    }
-
-    try {      
-      const sortedBlocks = topologicalSort(blocks, connections);
-
-      await window.electronAPI.writeFile(
-        `${projectDir}/blocks/${block.fileName}`,
-        block.code
-      );
-
-      const matlabCmd = buildBlockCommand(block, connections, instanceConfig);
-
-      addLog('info', `Starting ${block.name}...`);
-      
+    try {
       const platform = await window.electronAPI.getPlatform();
-      const envCmd = platform === 'win32' 
-        ? `set BLOCK_ID=${block.id} && set INSTANCE_ID=${instanceConfig.instanceId} && set MATLAB_PORT=${instanceConfig.matlabPort} && `
-        : `export BLOCK_ID=${block.id} && export INSTANCE_ID=${instanceConfig.instanceId} && export MATLAB_PORT=${instanceConfig.matlabPort} && `;
-      
-      const procResult = await window.electronAPI.startProcess(
-        `${envCmd}matlab -batch "cd('${projectDir}/blocks'); addpath('${projectDir}/server'); ${matlabCmd}"`,
-        projectDir,
-        block.name
-      );
+      const languagePort = getBlockLanguagePort(block, instanceConfig);
+      addLog('info', `Manually starting ${block.name} [${block.language?.toUpperCase()}] → port ${languagePort}`);
 
+      if (block.language === 'matlab') await window.electronAPI.writeFile(`${projectDir}/matlab_blocks/${block.fileName}`, block.code);
+      else if (block.language === 'cpp') await window.electronAPI.writeFile(`${projectDir}/cpp_blocks/${block.fileName}`, block.code);
+
+      const parsed = buildBlockArgs(block, connections);
+      let fullCommand;
+
+      if (parsed.type === 'cpp') {
+        const { exeName, args } = parsed;
+        const exePath = `${projectDir}\\cpp_blocks\\bin\\${exeName}`;
+        
+        // FIX: Build args string carefully - no extra spaces
+        const argsString = args.join(' ');
+        
+        // Direct command with environment variables - proper quoting
+        fullCommand = `cmd /C "set BLOCK_ID=${block.id}&& set INSTANCE_ID=${instanceConfig.instanceId}&& set CPP_PORT=${languagePort}&& "${exePath}" ${argsString}"`;
+      } else {
+        const { functionCall } = parsed;
+        if (platform === 'win32') {
+          const batContent = buildMatlabBat(block, functionCall, instanceConfig, languagePort);
+          const batPath = `${projectDir}\\matlab_blocks\\launch_${block.id}.bat`;
+          await window.electronAPI.writeFile(batPath, batContent);
+          fullCommand = `cmd /C "${batPath}"`;
+        } else {
+          fullCommand = `BLOCK_ID=${block.id} INSTANCE_ID=${instanceConfig.instanceId} MATLAB_PORT=${languagePort} matlab -batch "cd('${projectDir}/matlab_blocks'); addpath('${projectDir}/server'); addpath('${projectDir}/matlab_blocks/core'); ${functionCall}"`;
+        }
+      }
+
+      addLog('info', `Full command: ${fullCommand}`);
+      const procResult = await window.electronAPI.startProcess(fullCommand, projectDir, block.name);
       if (procResult.success) {
         setBlockProcesses(prev => ({
           ...prev,
-          [block.id]: { pid: procResult.pid, status: 'starting', name: block.name }
+          [block.id]: { pid: procResult.pid, status: 'starting', name: block.name, language: block.language || 'matlab' }
         }));
-        addLog('info', `${block.name} process started (PID: ${procResult.pid}), waiting for BLOCK_READY...`);
+        addLog('info', `${block.name} started (PID: ${procResult.pid})`);
       } else {
         throw new Error(procResult.error);
       }
@@ -5838,24 +7186,15 @@ export const useServerOperations = ({
   };
 
   const handleStopBlock = async (block, blockProcesses, setBlockMetrics) => {
-    const processInfo = blockProcesses[block.id];
-    if (processInfo) {
-      addLog('info', `Stopping ${block.name} (PID: ${processInfo.pid})...`);
-      const result = await window.electronAPI.killProcess(processInfo.pid);
-      if (result.success) {
+    const info = blockProcesses[block.id];
+    if (info) {
+      const r = await window.electronAPI.killProcess(info.pid);
+      if (r.success) {
         addLog('success', `${block.name} stopped`);
-        setBlockProcesses(prev => {
-          const newProcs = { ...prev };
-          delete newProcs[block.id];
-          return newProcs;
-        });
-        setBlockMetrics(prev => {
-          const newMetrics = { ...prev };
-          delete newMetrics[block.id];
-          return newMetrics;
-        });
+        setBlockProcesses(prev => { const n = { ...prev }; delete n[block.id]; return n; });
+        setBlockMetrics(prev => { const n = { ...prev }; delete n[block.id]; return n; });
       } else {
-        addLog('error', `Failed to stop ${block.name}: ${result.error}`);
+        addLog('error', `Failed to stop ${block.name}: ${r.error}`);
       }
     }
   };
@@ -6544,6 +7883,263 @@ export const generateCppServer = (sortedBlocks, connections) => {
   return content;
 };
 
+
+--- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\utils\cppBlockUtils.js ---
+import { generateColor, calculatePortPositions, BLOCK_WIDTH, BLOCK_HEIGHT, GRID_SIZE } from './blockUtils';
+
+/**
+ * Parse C++ block configuration from source code
+ * Looks for BlockConfig struct initialization
+ * 
+ * FIX: The original regex `[^}]*` stopped at the first `}` inside the struct body,
+ * which happened to be the closing brace of the first array literal (e.g. `{1504}`).
+ * This meant ltr, startWithAll, and description were never reached by the parser.
+ *
+ * The fix extracts the struct body by counting brace depth instead.
+ */
+
+/**
+ * Extract the content inside the outermost BlockConfig braces,
+ * correctly handling nested `{...}` array literals.
+ */
+const extractStructBody = (fileContent) => {
+  // Find the start of the BlockConfig initializer
+  const headerMatch = fileContent.match(/BlockConfig\s+\w+\s*=\s*\{/);
+  if (!headerMatch) return null;
+
+  const startIdx = headerMatch.index + headerMatch[0].length; // character after the opening `{`
+
+  let depth = 1;
+  let i = startIdx;
+
+  while (i < fileContent.length && depth > 0) {
+    if (fileContent[i] === '{') depth++;
+    else if (fileContent[i] === '}') depth--;
+    i++;
+  }
+
+  if (depth !== 0) return null; // Unmatched braces
+
+  return fileContent.slice(startIdx, i - 1); // Content between the outermost braces
+};
+
+const parseCppStruct = (fileContent) => {
+  const body = extractStructBody(fileContent);
+  if (!body) return null;
+
+  const config = {};
+
+  // ── String fields ────────────────────────────────────────────────────────────
+  // Match:  "value",   // fieldName  (extra trailing text allowed)
+  const stringFields = ['name', 'description'];
+  stringFields.forEach(field => {
+    const regex = new RegExp('"([^"]*)"[^\\n]*//[^\\n]*\\b' + field + '\\b', 'i');
+    const match = body.match(regex);
+    if (match) config[field] = match[1];
+  });
+
+  // ── Numeric fields ───────────────────────────────────────────────────────────
+  const numericFields = ['inputs', 'outputs'];
+  numericFields.forEach(field => {
+    const regex = new RegExp('(\\d+)[^\\n]*//[^\\n]*\\b' + field + '\\b', 'i');
+    const match = body.match(regex);
+    if (match) config[field] = parseInt(match[1]);
+  });
+
+  // ── Boolean fields ───────────────────────────────────────────────────────────
+  // Match:  true,      // ltr   or   false,  // startWithAll (AUTO-START)
+  const boolFields = ['ltr', 'startWithAll', 'isGraph'];
+  boolFields.forEach(field => {
+    const regex = new RegExp('(true|false)[^\\n]*//[^\\n]*\\b' + field + '\\b', 'i');
+    const match = body.match(regex);
+    if (match) config[field] = match[1].toLowerCase() === 'true';
+  });
+
+  // ── Array fields ─────────────────────────────────────────────────────────────
+  // Match:  {val1, val2},   // fieldName
+  const arrayFields = [
+    'inputPacketSizes',
+    'inputBatchSizes',
+    'outputPacketSizes',
+    'outputBatchSizes',
+  ];
+  arrayFields.forEach(field => {
+    const regex = new RegExp('\\{([^}]*)\\}[^\\n]*//[^\\n]*\\b' + field + '\\b', 'i');
+    const match = body.match(regex);
+    if (match) {
+      config[field] = match[1]
+        .split(',')
+        .map(v => parseInt(v.trim()))
+        .filter(n => !isNaN(n));
+    }
+  });
+
+  // ── graphType (optional string) ──────────────────────────────────────────────
+  const graphTypeMatch = body.match(/"([^"]*)"[^\\n]*\/\/[^\\n]*\bgraphType\b/i);
+  if (graphTypeMatch) config.graphType = graphTypeMatch[1];
+
+  return Object.keys(config).length > 0 ? config : null;
+};
+
+/**
+ * Calculate length bytes needed for batch count
+ */
+const calculateLengthBytes = (maxCount) => {
+  if (maxCount <= 255) return 1;
+  if (maxCount <= 65535) return 2;
+  if (maxCount <= 16777215) return 3;
+  return 4;
+};
+
+/**
+ * Calculate total buffer size (length header + all packets)
+ */
+const calculateBufferSize = (packetSize, batchSize) => {
+  const lengthBytes = calculateLengthBytes(batchSize);
+  return lengthBytes + (packetSize * batchSize);
+};
+
+/**
+ * Main C++ block parser
+ */
+export const parseCppBlock = (fileContent, fileName) => {
+  const config = parseCppStruct(fileContent);
+
+  if (!config) {
+    throw new Error(
+      'No BlockConfig struct found.\n\n' +
+      'Add a BlockConfig initialization to your C++ file.\n\n' +
+      'Example:\n' +
+      'BlockConfig config = {\n' +
+      '    "MyBlock",      // name\n' +
+      '    1,              // inputs\n' +
+      '    1,              // outputs\n' +
+      '    {1500},         // inputPacketSizes\n' +
+      '    {10},           // inputBatchSizes\n' +
+      '    {1500},         // outputPacketSizes\n' +
+      '    {10},           // outputBatchSizes\n' +
+      '    true,           // ltr\n' +
+      '    true,           // startWithAll\n' +
+      '    "Description"   // description\n' +
+      '};'
+    );
+  }
+
+  const numInputs = config.inputs || 0;
+  const numOutputs = config.outputs || 0;
+
+  // Parse packet sizes
+  let inputPacketSizes = config.inputPacketSizes || [0];
+  let outputPacketSizes = config.outputPacketSizes || [0];
+
+  // Parse batch sizes
+  let inputBatchSizes = config.inputBatchSizes || [1];
+  let outputBatchSizes = config.outputBatchSizes || [1];
+
+  // Ensure arrays match port counts
+  if (numInputs > 0 && inputPacketSizes.length !== numInputs) {
+    throw new Error(`inputPacketSizes array length (${inputPacketSizes.length}) must match inputs (${numInputs})`);
+  }
+  if (numInputs > 0 && inputBatchSizes.length !== numInputs) {
+    throw new Error(`inputBatchSizes array length (${inputBatchSizes.length}) must match inputs (${numInputs})`);
+  }
+  if (numOutputs > 0 && outputPacketSizes.length !== numOutputs) {
+    throw new Error(`outputPacketSizes array length (${outputPacketSizes.length}) must match outputs (${numOutputs})`);
+  }
+  if (numOutputs > 0 && outputBatchSizes.length !== numOutputs) {
+    throw new Error(`outputBatchSizes array length (${outputBatchSizes.length}) must match outputs (${numOutputs})`);
+  }
+
+  // Calculate buffer sizes
+  const inputBufferSizes = inputPacketSizes.map((packetSize, i) =>
+    calculateBufferSize(packetSize, inputBatchSizes[i])
+  );
+
+  const outputBufferSizes = outputPacketSizes.map((packetSize, i) =>
+    calculateBufferSize(packetSize, outputBatchSizes[i])
+  );
+
+  // Calculate length header sizes
+  const inputLengthBytes = inputBatchSizes.map(calculateLengthBytes);
+  const outputLengthBytes = outputBatchSizes.map(calculateLengthBytes);
+
+  // Total sizes
+  const totalInputSize = inputBufferSizes.reduce((a, b) => a + b, 0);
+  const totalOutputSize = outputBufferSizes.reduce((a, b) => a + b, 0);
+
+  // Size relation
+  let sizeRelation;
+  if (totalInputSize === 0) {
+    sizeRelation = { type: 'source', description: 'Data source' };
+  } else if (totalOutputSize === 0) {
+    sizeRelation = { type: 'sink', description: 'Data sink' };
+  } else if (totalOutputSize === totalInputSize) {
+    sizeRelation = { type: 'same', description: 'Same size' };
+  } else if (totalOutputSize > totalInputSize) {
+    const ratio = totalOutputSize / totalInputSize;
+    sizeRelation = {
+      type: 'multiply',
+      factor: ratio,
+      description: `×${ratio.toFixed(2)} (${config.description || 'increases size'})`,
+    };
+  } else {
+    const ratio = totalInputSize / totalOutputSize;
+    sizeRelation = {
+      type: 'divide',
+      factor: ratio,
+      description: `÷${ratio.toFixed(2)} (${config.description || 'decreases size'})`,
+    };
+  }
+
+  const ltr = config.ltr !== undefined ? config.ltr : true;
+  const startWithAll = config.startWithAll !== undefined ? config.startWithAll : false;
+  const isGraph = config.graphType !== undefined;
+
+  return {
+    name: config.name || fileName.replace('.cpp', ''),
+    fileName,
+    code: fileContent,
+    language: 'cpp',
+    inputs: numInputs,
+    outputs: numOutputs,
+
+    // Batch processing fields
+    inputPacketSizes,
+    inputBatchSizes,
+    outputPacketSizes,
+    outputBatchSizes,
+    inputBufferSizes,
+    outputBufferSizes,
+    inputLengthBytes,
+    outputLengthBytes,
+
+    // Legacy fields
+    inputSize: totalInputSize,
+    outputSize: totalOutputSize,
+    inputSizes: inputBufferSizes,
+    outputSizes: outputBufferSizes,
+
+    description: config.description || 'No description',
+    config,
+    color: isGraph ? '#9333ea' : generateColor(config.name || fileName.replace('.cpp', '')),
+    portPositions: calculatePortPositions(numInputs, numOutputs, ltr, BLOCK_WIDTH, BLOCK_HEIGHT, GRID_SIZE),
+    sizeRelation,
+    ltr,
+    startWithAll,
+    isGraph,
+    graphType: config.graphType || null,
+  };
+};
+
+/**
+ * Detect if a file is a C++ block
+ */
+export const isCppBlock = (fileContent) => {
+  return (
+    fileContent.includes('#include "core/run_generic_block.h"') ||
+    fileContent.includes('run_generic_block')
+  );
+};
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\utils\formatDataSize.js ---
 // Utility function to format data sizes with proper units (B, KB, MB, GB, TB)

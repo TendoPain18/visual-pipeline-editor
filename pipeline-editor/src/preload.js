@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   // Instance configuration
   getInstanceConfig: () => ipcRenderer.invoke('get-instance-config'),
+  getNextBlockId: () => ipcRenderer.invoke('get-next-block-id'),
   
   // File operations
   readFile: (filepath) => ipcRenderer.invoke('read-file', filepath),
@@ -31,7 +32,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform information
   getPlatform: () => process.platform,
   
-  // Listen to process output (for MATLAB blocks)
+  // Listen to process output
   onProcessOutput: (callback) => {
     const subscription = (event, data) => callback(data);
     ipcRenderer.on('process-output', subscription);
@@ -45,11 +46,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('server-message', subscription);
   },
   
-  // Listen to MATLAB block messages via socket
-  onMatlabMessage: (callback) => {
+  // Listen to block messages (MATLAB/C++/Python) via language-specific sockets
+  onBlockMessage: (callback) => {
     const subscription = (event, data) => callback(data);
-    ipcRenderer.on('matlab-message', subscription);
-    return () => ipcRenderer.removeListener('matlab-message', subscription);
+    ipcRenderer.on('block-message', subscription);
+    return () => ipcRenderer.removeListener('block-message', subscription);
   },
   
   // Listen to socket connection status
@@ -61,6 +62,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   removeProcessOutputListener: () => ipcRenderer.removeAllListeners('process-output'),
   removeServerMessageListener: () => ipcRenderer.removeAllListeners('server-message'),
-  removeMatlabMessageListener: () => ipcRenderer.removeAllListeners('matlab-message'),
+  removeBlockMessageListener: () => ipcRenderer.removeAllListeners('block-message'),
   removeServerSocketStatusListener: () => ipcRenderer.removeAllListeners('server-socket-status')
 });
