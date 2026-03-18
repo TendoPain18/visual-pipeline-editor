@@ -9,7 +9,7 @@ import { useProcessManager } from './hooks/useProcessManager';
 import { useCanvasInteraction } from './hooks/useCanvasInteraction';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useFileOperations } from './hooks/useFileOperations';
-import { useServerOperations } from './hooks/useServerOperations';
+import { useServerOperations, signalBlockReady, signalBlockError } from './hooks/useServerOperations';
 import { useCanvasHandlers } from './hooks/useCanvasHandlers';
 import { GRID_SIZE, parseMatlabBlock, calculatePortPositions, BLOCK_WIDTH, BLOCK_HEIGHT } from './utils/blockUtils';
 import { parseCppBlock } from './utils/cppBlockUtils';
@@ -23,7 +23,7 @@ const PipelineEditor = () => {
   const [executionLog, setExecutionLog] = useState([]);
   const [projectDir, setProjectDir] = useState('');
   const [clipboard, setClipboard] = useState(null);
-  const [isStartingServer, setIsStartingServer] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [graphWindows, setGraphWindows] = useState({});
   const [socketConnected, setSocketConnected] = useState(false);
   const [instanceConfig, setInstanceConfig] = useState(null);
@@ -106,10 +106,8 @@ const PipelineEditor = () => {
   });
 
   const {
-    handleStartServer,
-    handleStart,
-    handleStop,
-    handleTerminate,
+    handleStartAll,
+    handleStopAll,
     handleStartBlock,
     handleStopBlock
   } = useServerOperations({
@@ -119,8 +117,9 @@ const PipelineEditor = () => {
     instanceConfig,
     setServerRunning,
     setBlockProcesses,
-    setIsStartingServer,
-    addLog
+    setIsStarting,
+    addLog,
+    setBlockMetrics
   });
 
   const {
@@ -192,7 +191,7 @@ const PipelineEditor = () => {
     serverMessageListenerRef.current = window.electronAPI.onServerMessage((message) => {
       console.log('Server message received:', message);
       
-      const { type, message: msg, data, timestamp } = message;
+      const { type, message: msg } = message;
       
       switch (type) {
         case 'CONNECTED':
@@ -289,6 +288,9 @@ const PipelineEditor = () => {
         case 'BLOCK_READY':
           addLog('success', `[${blockName}] [${language}] Ready`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'ready' }));
+          // ✅ FIX: Signal the waiting Promise in useServerOperations directly.
+          // The old code relied on polling React state which had stale closure issues.
+          signalBlockReady(blockId);
           setBlockProcesses(prev => {
             const blockEntry = Object.entries(prev).find(([key, proc]) => 
               proc.name === blockName
@@ -343,6 +345,8 @@ const PipelineEditor = () => {
         case 'BLOCK_ERROR':
           addLog('error', `[${blockName}] [${language}] ${data.error || data.status || 'Error'}`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'error' }));
+          // ✅ FIX: Also reject the waiting Promise so startup doesn't hang on errored blocks
+          signalBlockError(blockId, data.error || data.status || 'Block error');
           break;
           
         case 'BLOCK_STOPPING':
@@ -461,7 +465,7 @@ const PipelineEditor = () => {
     setIsEditingCode(true);
   };
 
-  const handleSaveBlockCode = (updatedCode) => {
+  const handleSaveBlockCode = async (updatedCode) => {
     const block = selectedBlocks[0];
     
     try {
@@ -531,14 +535,61 @@ const PipelineEditor = () => {
         return false;
       });
       
-      const newBlocks = blocks.map(b => b.id === block.id ? updatedBlock : b);
-      const newConnections = connections.filter(conn => !removedConnections.includes(conn));
+      // Check if any existing connections have size mismatches
+      const invalidConnections = connections.filter(conn => {
+        if (conn.fromBlock === block.id) {
+          const toBlock = blocks.find(b => b.id === conn.toBlock);
+          if (toBlock) {
+            const outputPacketSize = reparsedData.outputPacketSizes[conn.fromPort];
+            const outputBatchSize = reparsedData.outputBatchSizes[conn.fromPort];
+            const inputPacketSize = toBlock.inputPacketSizes[conn.toPort];
+            const inputBatchSize = toBlock.inputBatchSizes[conn.toPort];
+            
+            if (outputPacketSize !== inputPacketSize || outputBatchSize !== inputBatchSize) {
+              return true;
+            }
+          }
+        }
+        
+        if (conn.toBlock === block.id) {
+          const fromBlock = blocks.find(b => b.id === conn.fromBlock);
+          if (fromBlock) {
+            const inputPacketSize = reparsedData.inputPacketSizes[conn.toPort];
+            const inputBatchSize = reparsedData.inputBatchSizes[conn.toPort];
+            const outputPacketSize = fromBlock.outputPacketSizes[conn.fromPort];
+            const outputBatchSize = fromBlock.outputBatchSizes[conn.fromPort];
+            
+            if (inputPacketSize !== outputPacketSize || inputBatchSize !== outputBatchSize) {
+              return true;
+            }
+          }
+        }
+        
+        return false;
+      });
       
-      if (removedConnections.length > 0) {
-        addLog('warning', `Removed ${removedConnections.length} connection(s) due to port changes`);
+      const allRemovedConnections = [...new Set([...removedConnections, ...invalidConnections])];
+      
+      const newBlocks = blocks.map(b => b.id === block.id ? updatedBlock : b);
+      const newConnections = connections.filter(conn => !allRemovedConnections.includes(conn));
+      
+      if (allRemovedConnections.length > 0) {
+        addLog('warning', `Removed ${allRemovedConnections.length} connection(s) due to port or size changes`);
         updateBothWithHistory(newBlocks, newConnections);
       } else {
         updateBlocksWithHistory(newBlocks);
+      }
+      
+      // SAVE TO DISK IMMEDIATELY
+      const filePath = block.language === 'matlab' 
+        ? `${projectDir}/matlab_blocks/${block.fileName}`
+        : `${projectDir}/cpp_blocks/${block.fileName}`;
+      
+      try {
+        await window.electronAPI.writeFile(filePath, updatedCode);
+        addLog('success', `Saved ${updatedBlock.name} to disk`);
+      } catch (err) {
+        addLog('error', `Failed to save to disk: ${err.message}`);
       }
       
       setSelectedBlocks([updatedBlock]);
@@ -622,10 +673,8 @@ const PipelineEditor = () => {
       
       <div className="flex-1 flex flex-col">
         <Toolbar
-          onStartServer={handleStartServer}
-          onStart={() => handleStart()}
-          onStop={() => handleStop(blockProcesses, setBlockMetrics)}
-          onTerminate={() => handleTerminate(setBlockMetrics)}
+          onStart={handleStartAll}
+          onStopAll={handleStopAll}
           onImport={async () => {
             const newBlocks = await handleFileUpload();
             if (newBlocks && newBlocks.length > 0) {
@@ -636,9 +685,8 @@ const PipelineEditor = () => {
           onLoad={handleLoadDiagram}
           onSave={handleSaveDiagram}
           serverRunning={serverRunning}
-          isStartingServer={isStartingServer}
+          isStarting={isStarting}
           hasProcesses={Object.keys(blockProcesses).length > 0}
-          socketConnected={socketConnected}
         />
         
         <div className="flex-1 overflow-auto bg-gray-50">

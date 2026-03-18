@@ -29,49 +29,13 @@ inline int calculateLengthBytes(int maxCount) {
     return 4;
 }
 
-// Write batch to pipe with length header
-inline void writeBatch(const char* pipeName, int8_t* batchData, int actualCount, 
-                      int lengthBytes, int totalSize) {
-    std::string instanceId = getEnvString("INSTANCE_ID", "");
-    std::string fullPipeName = "Instance_" + instanceId + "_" + std::string(pipeName);
-    
-    char readyName[256], emptyName[256];
-    sprintf(readyName, "%s_Ready", fullPipeName.c_str());
-    sprintf(emptyName, "%s_Empty", fullPipeName.c_str());
-    
-    HANDLE hMapFile = OpenFileMappingA(FILE_MAP_WRITE, FALSE, fullPipeName.c_str());
-    if (!hMapFile) {
-        fprintf(stderr, "[PIPE] Failed to open %s: %lu\n", fullPipeName.c_str(), GetLastError());
-        return;
-    }
-    
-    void* pBuf = MapViewOfFile(hMapFile, FILE_MAP_WRITE, 0, 0, totalSize);
-    if (!pBuf) {
-        CloseHandle(hMapFile);
-        return;
-    }
-    
-    HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, emptyName);
-    HANDLE hReady = OpenEventA(EVENT_MODIFY_STATE, FALSE, readyName);
-    
-    WaitForSingleObject(hEmpty, INFINITE);
-    
-    uint8_t* buffer = (uint8_t*)pBuf;
-    for (int i = 0; i < lengthBytes; i++) {
-        buffer[i] = (actualCount >> (i * 8)) & 0xFF;
-    }
-    
-    memcpy(buffer + lengthBytes, batchData, totalSize - lengthBytes);
-    
-    SetEvent(hReady);
-    
-    UnmapViewOfFile(pBuf);
-    CloseHandle(hMapFile);
-    CloseHandle(hEmpty);
-    CloseHandle(hReady);
+// Calculate total buffer size
+inline int calculateBufferSize(int packetSize, int batchSize) {
+    int lengthBytes = calculateLengthBytes(batchSize);
+    return lengthBytes + (packetSize * batchSize);
 }
 
-// Read batch from pipe with length header
+// Low-level pipe read
 inline int readBatch(const char* pipeName, int8_t* batchData, int lengthBytes, int totalSize) {
     std::string instanceId = getEnvString("INSTANCE_ID", "");
     std::string fullPipeName = "Instance_" + instanceId + "_" + std::string(pipeName);
@@ -115,13 +79,93 @@ inline int readBatch(const char* pipeName, int8_t* batchData, int lengthBytes, i
     return actualCount;
 }
 
-// Generic block runner
+// Low-level pipe write
+inline void writeBatch(const char* pipeName, int8_t* batchData, int actualCount, int lengthBytes, int totalSize) {
+    std::string instanceId = getEnvString("INSTANCE_ID", "");
+    std::string fullPipeName = "Instance_" + instanceId + "_" + std::string(pipeName);
+    
+    char readyName[256], emptyName[256];
+    sprintf(readyName, "%s_Ready", fullPipeName.c_str());
+    sprintf(emptyName, "%s_Empty", fullPipeName.c_str());
+    
+    HANDLE hMapFile = OpenFileMappingA(FILE_MAP_WRITE, FALSE, fullPipeName.c_str());
+    if (!hMapFile) {
+        fprintf(stderr, "[PIPE] Failed to open %s: %lu\n", fullPipeName.c_str(), GetLastError());
+        return;
+    }
+    
+    void* pBuf = MapViewOfFile(hMapFile, FILE_MAP_WRITE, 0, 0, totalSize);
+    if (!pBuf) {
+        CloseHandle(hMapFile);
+        return;
+    }
+    
+    HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, emptyName);
+    HANDLE hReady = OpenEventA(EVENT_MODIFY_STATE, FALSE, readyName);
+    
+    WaitForSingleObject(hEmpty, INFINITE);
+    
+    uint8_t* buffer = (uint8_t*)pBuf;
+    for (int i = 0; i < lengthBytes; i++) {
+        buffer[i] = (actualCount >> (i * 8)) & 0xFF;
+    }
+    
+    memcpy(buffer + lengthBytes, batchData, totalSize - lengthBytes);
+    
+    SetEvent(hReady);
+    
+    UnmapViewOfFile(pBuf);
+    CloseHandle(hMapFile);
+    CloseHandle(hEmpty);
+    CloseHandle(hReady);
+}
+
+// ============================================================================
+// PIPE I/O HELPER CLASS - Easy manual pipe operations
+// ============================================================================
+
+class PipeIO {
+private:
+    const char* pipeName;
+    int lengthBytes;
+    int packetSize;
+    int batchSize;
+    int bufferSize;
+    
+public:
+    PipeIO(const char* pipe, int pktSize, int batchSz) 
+        : pipeName(pipe), packetSize(pktSize), batchSize(batchSz) {
+        lengthBytes = calculateLengthBytes(batchSz);
+        bufferSize = lengthBytes + (pktSize * batchSz);
+    }
+    
+    // Read a batch - returns number of packets read
+    int read(int8_t* buffer) {
+        return readBatch(pipeName, buffer, lengthBytes, bufferSize);
+    }
+    
+    // Write a batch
+    void write(int8_t* buffer, int actualCount) {
+        writeBatch(pipeName, buffer, actualCount, lengthBytes, bufferSize);
+    }
+    
+    int getBufferSize() const { return bufferSize; }
+    int getPacketSize() const { return packetSize; }
+    int getBatchSize() const { return batchSize; }
+    int getLengthBytes() const { return lengthBytes; }
+    const char* getName() const { return pipeName; }
+};
+
+// ============================================================================
+// MANUAL I/O BLOCK RUNNER - Full control over read/write timing
+// ============================================================================
+
 template<typename CustomData>
-void run_generic_block(
+void run_manual_block(
     const char** pipeIn,
     const char** pipeOut,
     const BlockConfig& config,
-    void (*process_fn)(int8_t*, int, int8_t*, int&, CustomData&, const BlockConfig&),
+    void (*process_fn)(const char**, const char**, CustomData&, const BlockConfig&),
     CustomData (*init_fn)(const BlockConfig&) = nullptr
 ) {
     // Get block ID from environment
@@ -142,32 +186,29 @@ void run_generic_block(
     socket.sendInit(blockId, config.name, pid);
     
     printf("\n========================================\n");
-    printf("%s - Generic Block Framework\n", config.name);
+    printf("%s - MANUAL I/O MODE\n", config.name);
     printf("========================================\n");
+    printf("Block has full control over read/write timing\n");
     
     bool isSource = (config.inputs == 0);
     bool isSink = (config.outputs == 0);
     
-    // Calculate buffer parameters
-    int inputPacketSize = 0, inputBatchSize = 0, inputLengthBytes = 0, inputBufferSize = 0;
-    int outputPacketSize = 0, outputBatchSize = 0, outputLengthBytes = 0, outputBufferSize = 0;
-    
     if (!isSource) {
-        inputPacketSize = config.inputPacketSizes[0];
-        inputBatchSize = config.inputBatchSizes[0];
-        inputLengthBytes = calculateLengthBytes(inputBatchSize);
-        inputBufferSize = inputLengthBytes + (inputPacketSize * inputBatchSize);
-        printf("INPUT:  %d bytes × %d packets (header: %dB, total: %.2fKB)\n",
-               inputPacketSize, inputBatchSize, inputLengthBytes, inputBufferSize/1024.0);
+        printf("INPUTS: %d\n", config.inputs);
+        for (int i = 0; i < config.inputs; i++) {
+            int bufSize = calculateBufferSize(config.inputPacketSizes[i], config.inputBatchSizes[i]);
+            printf("  Input %d: %d bytes × %d packets = %.2f KB\n",
+                   i, config.inputPacketSizes[i], config.inputBatchSizes[i], bufSize / 1024.0);
+        }
     }
     
     if (!isSink) {
-        outputPacketSize = config.outputPacketSizes[0];
-        outputBatchSize = config.outputBatchSizes[0];
-        outputLengthBytes = calculateLengthBytes(outputBatchSize);
-        outputBufferSize = outputLengthBytes + (outputPacketSize * outputBatchSize);
-        printf("OUTPUT: %d bytes × %d packets (header: %dB, total: %.2fKB)\n",
-               outputPacketSize, outputBatchSize, outputLengthBytes, outputBufferSize/1024.0);
+        printf("OUTPUTS: %d\n", config.outputs);
+        for (int i = 0; i < config.outputs; i++) {
+            int bufSize = calculateBufferSize(config.outputPacketSizes[i], config.outputBatchSizes[i]);
+            printf("  Output %d: %d bytes × %d packets = %.2f KB\n",
+                   i, config.outputPacketSizes[i], config.outputBatchSizes[i], bufSize / 1024.0);
+        }
     }
     
     printf("========================================\n\n");
@@ -181,75 +222,55 @@ void run_generic_block(
     
     socket.sendReady(blockId, config.name);
     
-    // Allocate buffers
-    int8_t* inputBatch = isSource ? nullptr : new int8_t[inputBufferSize];
-    int8_t* outputBatch = isSink ? nullptr : new int8_t[outputBufferSize];
-    
     // Metrics
-    int batchCount = 0;
+    int iterationCount = 0;
     double totalBytes = 0;
     LARGE_INTEGER freq, startTime, lastTime;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&startTime);
     lastTime = startTime;
     
-    // Main loop
+    // Main loop - block controls EVERYTHING
     try {
         while (true) {
-            int actualInputCount = 0;
+            // Block's processing function controls all I/O
+            process_fn(pipeIn, pipeOut, customData, config);
             
-            // Read input
-            if (!isSource) {
-                actualInputCount = readBatch(pipeIn[0], inputBatch, inputLengthBytes, inputBufferSize);
+            iterationCount++;
+            
+            // Estimate throughput (rough)
+            if (!isSink && config.outputs > 0) {
+                totalBytes += calculateBufferSize(config.outputPacketSizes[0], config.outputBatchSizes[0]);
+            } else if (!isSource && config.inputs > 0) {
+                totalBytes += calculateBufferSize(config.inputPacketSizes[0], config.inputBatchSizes[0]);
             }
             
-            // Process
-            int actualOutputCount = 0;
-            process_fn(inputBatch, actualInputCount, outputBatch, actualOutputCount, customData, config);
-            
-            // Write output
-            if (!isSink && outputBatch) {
-                writeBatch(pipeOut[0], outputBatch, actualOutputCount, outputLengthBytes, outputBufferSize);
-            }
-            
-            batchCount++;
-            
-            // Calculate throughput
-            if (!isSink) {
-                totalBytes += outputBufferSize;
-            } else if (!isSource) {
-                totalBytes += inputBufferSize;
-            }
-            
+            // Send metrics
             LARGE_INTEGER currentTime;
             QueryPerformanceCounter(&currentTime);
             double elapsed = (double)(currentTime.QuadPart - lastTime.QuadPart) / freq.QuadPart;
             
             if (elapsed > 0) {
                 double instantGbps = ((totalBytes * 8.0) / 1e9) / elapsed;
-                socket.sendMetrics(blockId, config.name, batchCount, instantGbps, totalBytes / 1e9);
+                socket.sendMetrics(blockId, config.name, iterationCount, instantGbps, totalBytes / 1e9);
                 lastTime = currentTime;
             }
             
-            if (batchCount % 100 == 0) {
+            if (iterationCount % 100 == 0) {
                 LARGE_INTEGER now;
                 QueryPerformanceCounter(&now);
                 double totalElapsed = (double)(now.QuadPart - startTime.QuadPart) / freq.QuadPart;
                 double avgGbps = ((totalBytes * 8.0) / 1e9) / totalElapsed;
-                printf("Batches: %d, Avg Throughput: %.2f Gbps\n", batchCount, avgGbps);
+                printf("Iterations: %d, Avg Throughput: %.2f Gbps\n", iterationCount, avgGbps);
             }
         }
     } catch (...) {
         printf("\nBlock finished\n");
-        printf("Total batches: %d\n", batchCount);
+        printf("Total iterations: %d\n", iterationCount);
         printf("Total data: %.2f GB\n", totalBytes / 1e9);
         
         socket.sendStopped(blockId, config.name);
     }
-    
-    // Cleanup
-    if (inputBatch) delete[] inputBatch;
-    if (outputBatch) delete[] outputBatch;
 }
 
 #endif // RUN_GENERIC_BLOCK_H

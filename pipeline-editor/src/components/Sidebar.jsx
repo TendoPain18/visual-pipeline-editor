@@ -21,11 +21,11 @@ export const Sidebar = ({
     <div className="w-96 bg-white border-r border-gray-300 flex flex-col flex-shrink-0">
       <div className="p-4 border-b border-gray-300 bg-gradient-to-r from-blue-600 to-purple-600">
         <h2 className="text-xl font-bold text-white">Pipeline System Designer</h2>
-        <p className="text-sm text-blue-100 mt-1">MATLAB Block Diagram Editor</p>
+        <p className="text-sm text-blue-100 mt-1">Block Diagram Editor</p>
         {instanceConfig && (
           <div className="mt-2 text-xs text-blue-50 font-mono">
             <div>Instance: {instanceConfig.instanceId.substring(0, 16)}...</div>
-            <div>Ports: {instanceConfig.serverPort} / {instanceConfig.matlabPort}</div>
+            <div>Server Port: {instanceConfig.serverPort}</div>
           </div>
         )}
       </div>
@@ -104,10 +104,6 @@ export const Sidebar = ({
                     <div className="flex justify-between">
                       <span className="text-gray-700">Server Port:</span>
                       <span className="font-semibold text-gray-900">{instanceConfig.serverPort}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-700">MATLAB Port:</span>
-                      <span className="font-semibold text-gray-900">{instanceConfig.matlabPort}</span>
                     </div>
                     <div className="border-t border-gray-200 my-2"></div>
                   </>

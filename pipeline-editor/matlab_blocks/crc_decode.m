@@ -1,7 +1,6 @@
 function crc_decode(pipeIn, pipeOut)
-% CRC_DECODE - ITU-T CRC-32 decoder using generic block framework
+% CRC_DECODE  ITU-T CRC-32 decoder with error detection — manual I/O version.
 
-    % ========== USER CONFIGURATION ==========
     block_config = struct( ...
         'name',              'CrcDecode', ...
         'inputs',            1, ...
@@ -16,94 +15,103 @@ function crc_decode(pipeIn, pipeOut)
         'socketPort',        9001, ...
         'description',       'CRC-32 decoder with error detection - batch processing' ...
     );
-    
-    % ========== CUSTOM INITIALIZATION ==========
-    init_fn = @(config) struct('crcTable', build_crc32_table(), 'errorCount', 0, 'packetCount', 0);
-    
-    % ========== PROCESSING FUNCTION ==========
-    process_fn = @(inputBatch, actualCount, customData, config) ...
-        process_crc_decode(inputBatch, actualCount, customData, config);
-    
-    % ========== RUN GENERIC BLOCK ==========
-    run_generic_block(pipeIn, pipeOut, block_config, process_fn, init_fn);
+
+    run_generic_block({pipeIn}, {pipeOut}, block_config, @process_fn, @init_fn);
 end
 
-function [outputBatch, actualOutputCount] = process_crc_decode(inputBatch, actualCount, customData, config)
-    INPUT_PACKET_SIZE = config.inputPacketSizes(1);
-    OUTPUT_PACKET_SIZE = config.outputPacketSizes(1);
-    OUTPUT_BATCH_SIZE = config.outputBatchSizes(1);
-    DATA_SIZE = INPUT_PACKET_SIZE - 4;  % Remove CRC bytes
-    
-    crcTable = customData.crcTable;
-    
-    % Pre-allocate output batch
-    outputBatch = zeros(OUTPUT_BATCH_SIZE * OUTPUT_PACKET_SIZE, 1, 'int8');
-    
-    % Process each packet: check CRC and remove it
-    for pktIdx = 1:actualCount
-        % Extract input packet (data + CRC)
-        inputOffset = (pktIdx - 1) * INPUT_PACKET_SIZE;
-        inputPacket = inputBatch(inputOffset + 1 : inputOffset + INPUT_PACKET_SIZE);
-        
-        % Split data and CRC
-        dataInt8 = inputPacket(1:DATA_SIZE);
-        crcInt8 = inputPacket(DATA_SIZE + 1 : INPUT_PACKET_SIZE);
-        
+%% ─── Init ───────────────────────────────────────────────────────────────────
+function state = init_fn(~)
+    state = struct( ...
+        'crcTable',   buildCrcTable(), ...
+        'errorCount', 0, ...
+        'pktCount',   0 ...
+    );
+    fprintf('[CrcDecode] CRC-32 table built\n');
+end
+
+%% ─── Process ────────────────────────────────────────────────────────────────
+function process_fn(pipeIn, pipeOut, initState, ~)
+    persistent state;
+    if isempty(state)
+        state = initState;
+    end
+
+    inp = pipeIn{1};
+    out = pipeOut{1};
+
+    IN_PKT   = inp.getPacketSize();   % 1504
+    OUT_PKT  = out.getPacketSize();   % 1501
+    DATA_SIZE = IN_PKT - 4;           % 1500
+
+    % ── Read ──────────────────────────────────────────────────────────────────
+    [inputBatch, actualCount] = inp.read();
+
+    % ── Process ───────────────────────────────────────────────────────────────
+    outputBatch = zeros(out.getBatchSize() * OUT_PKT, 1, 'int8');
+
+    for i = 1:actualCount
+        inOff  = (i-1) * IN_PKT;
+        outOff = (i-1) * OUT_PKT;
+
+        dataInt8 = inputBatch(inOff+1 : inOff+DATA_SIZE);
+        crcInt8  = inputBatch(inOff+DATA_SIZE+1 : inOff+IN_PKT);
+
         % Calculate CRC on data
-        dataAsUint8 = typecast(dataInt8, 'uint8');
-        calculatedCrc = calculate_crc32(dataAsUint8, crcTable);
-        
+        dataU8 = uint8(int32(dataInt8) + 128);
+        calcCrc = calcCrc32(dataU8, state.crcTable);
+
         % Extract received CRC
-        crcBytes = typecast(crcInt8, 'uint8');
-        receivedCrc = typecast(crcBytes, 'uint32');
-        
-        % Compare CRCs
-        if receivedCrc == calculatedCrc
+        crcU8 = uint8(int32(crcInt8) + 128);
+        recvCrc = typecast(crcU8, 'uint32');
+
+        % Compare
+        if recvCrc == calcCrc
             errorFlag = int8(0);
         else
             errorFlag = int8(1);
-            customData.errorCount = customData.errorCount + 1;
+            state.errorCount = state.errorCount + 1;
         end
-        
-        % Create output packet (data + error flag)
-        outputOffset = (pktIdx - 1) * OUTPUT_PACKET_SIZE;
-        outputBatch(outputOffset + 1 : outputOffset + DATA_SIZE) = dataInt8;
-        outputBatch(outputOffset + OUTPUT_PACKET_SIZE) = errorFlag;
-        
-        customData.packetCount = customData.packetCount + 1;
+
+        % Output: data + error flag
+        outputBatch(outOff+1 : outOff+DATA_SIZE)   = dataInt8;
+        outputBatch(outOff+OUT_PKT)                = errorFlag;
+
+        state.pktCount = state.pktCount + 1;
     end
-    
-    actualOutputCount = actualCount;
-    
-    % Periodic error reporting
-    if mod(customData.packetCount, 100000) == 0
-        errorRate = 100.0 * customData.errorCount / customData.packetCount;
-        fprintf('Packets: %d, Errors: %d (%.2f%%)\n', ...
-                customData.packetCount, customData.errorCount, errorRate);
+
+    % ── Write ─────────────────────────────────────────────────────────────────
+    out.write(outputBatch, actualCount);
+
+    % Periodic stats
+    if state.pktCount > 0 && mod(state.pktCount, 100000) == 0
+        fprintf('[CrcDecode] Packets: %d, Errors: %d (%.2f%%)\n', ...
+            state.pktCount, state.errorCount, ...
+            100*state.errorCount/state.pktCount);
     end
 end
 
-function crcTable = build_crc32_table()
-    poly = uint32(0xEDB88320);
-    crcTable = zeros(256, 1, 'uint32');
+%% ─── CRC helpers ─────────────────────────────────────────────────────────────
+function table = buildCrcTable()
+    poly  = uint32(0xEDB88320);
+    table = zeros(256,1,'uint32');
     for i = 0:255
         crc = uint32(i);
         for j = 0:7
-            if bitand(crc, uint32(1))
-                crc = bitxor(bitshift(crc, -1), poly);
+            if bitand(crc,uint32(1))
+                crc = bitxor(bitshift(crc,-1), poly);
             else
-                crc = bitshift(crc, -1);
+                crc = bitshift(crc,-1);
             end
         end
-        crcTable(i + 1) = crc;
+        table(i+1) = crc;
     end
 end
 
-function crc = calculate_crc32(data, crcTable)
+function crc = calcCrc32(data, table)
     crc = uint32(0xFFFFFFFF);
-    for i = 1:length(data)
-        tableIdx = bitxor(bitand(crc, uint32(0xFF)), uint32(data(i))) + 1;
-        crc = bitxor(bitshift(crc, -8), crcTable(tableIdx));
+    for i = 1:numel(data)
+        idx = bitxor(bitand(crc,uint32(255)), uint32(data(i))) + 1;
+        crc = bitxor(bitshift(crc,-8), table(idx));
     end
     crc = bitxor(crc, uint32(0xFFFFFFFF));
 end

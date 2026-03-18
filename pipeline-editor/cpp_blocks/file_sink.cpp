@@ -5,330 +5,361 @@
 #include <filesystem>
 #include <algorithm>
 #include <map>
+#include <ctime>
 
 namespace fs = std::filesystem;
 
-// File protocol constants
 const uint8_t START_FLAG[] = {0xAA, 0x55, 0xAA, 0x55};
-const uint8_t END_FLAG[] = {0x55, 0xAA, 0x55, 0xAA};
-const int FILENAME_LENGTH = 256;
-const int REPETITIONS = 10;
+const uint8_t END_FLAG[]   = {0x55, 0xAA, 0x55, 0xAA};
+const int FILENAME_LENGTH  = 256;
+const int REPETITIONS      = 10;
 
 struct FileInfo {
     std::string name;
     std::string tempPath;
     std::string finalPath;
-    uint64_t expectedSize;
-    uint64_t writtenBytes;
-    int errorCount;
+    uint64_t    expectedSize;
+    uint64_t    writtenBytes;
+    uint64_t    errorCount;     // <-- tracks CRC/error-flag bytes per file
     std::ofstream file;
-    bool active;
+    bool        active;
 };
 
 struct FileSinkData {
     std::vector<uint8_t> streamBuffer;
-    FileInfo currentFile;
-    int filesReceived;
-    int totalErrorCount;
-    std::string outputDirectory;
-    std::ofstream reportFile;
+    FileInfo             currentFile;
+    int                  filesReceived;
+    uint64_t             totalErrorCount;
+    std::string          outputDirectory;
+    std::string          reportPath;
 };
 
-// Helper: Find pattern in buffer
-int find_pattern(const std::vector<uint8_t>& data, const uint8_t* pattern, int patternLen) {
-    for (size_t i = 0; i <= data.size() - patternLen; i++) {
-        if (memcmp(&data[i], pattern, patternLen) == 0) {
-            return i;
-        }
+static int find_pattern(const std::vector<uint8_t> &data,
+                        const uint8_t *pattern, int patternLen) {
+    if ((int)data.size() < patternLen) return -1;
+    for (int i = 0; i <= (int)data.size() - patternLen; i++) {
+        if (memcmp(&data[i], pattern, patternLen) == 0) return i;
     }
     return -1;
 }
 
-// Helper: Majority vote for string
-std::string majority_vote_string(const std::vector<std::string>& strings) {
+static std::string majority_vote_string(const std::vector<std::string> &strings) {
     if (strings.empty()) return "";
-    
     std::map<std::string, int> counts;
-    for (const auto& s : strings) {
-        counts[s]++;
-    }
-    
-    int maxCount = 0;
+    for (const auto &s : strings) counts[s]++;
     std::string result;
-    for (const auto& pair : counts) {
-        if (pair.second > maxCount) {
-            maxCount = pair.second;
-            result = pair.first;
-        }
+    int maxCount = 0;
+    for (const auto &pair : counts) {
+        if (pair.second > maxCount) { maxCount = pair.second; result = pair.first; }
     }
     return result;
 }
 
-FileSinkData init_file_sink(const BlockConfig& config) {
+// ---- Write a completed-file entry to the error report ----
+static void append_to_report(const std::string &reportPath, const FileInfo &fi) {
+    std::ofstream rpt(reportPath, std::ios::app);
+    if (!rpt.is_open()) return;
+
+    // Timestamp
+    time_t now = time(nullptr);
+    char tbuf[32];
+    strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+
+    rpt << "[" << tbuf << "]\n";
+    rpt << "File: " << fi.name << "\n";
+    rpt << "  Size:         " << fi.expectedSize << " bytes ("
+        << (fi.expectedSize / 1e6) << " MB)\n";
+    rpt << "  Errors:       " << fi.errorCount << "\n";
+    if (fi.errorCount > 0) {
+        double rate = 100.0 * (double)fi.errorCount / (double)fi.expectedSize;
+        rpt << "  Error Rate:   " << rate << " %\n";
+        rpt << "  Status:       CORRUPTED\n";
+    } else {
+        rpt << "  Status:       CLEAN\n";
+    }
+    rpt << "\n";
+    rpt.flush();
+}
+
+FileSinkData init_file_sink(const BlockConfig &config) {
     FileSinkData data;
     data.outputDirectory = "Output_Files";
-    data.filesReceived = 0;
+    data.filesReceived   = 0;
     data.totalErrorCount = 0;
-    data.currentFile.active = false;
-    
-    // Create output directory
+    data.currentFile.active      = false;
+    data.currentFile.errorCount  = 0;
+    data.currentFile.writtenBytes= 0;
+
     if (!fs::exists(data.outputDirectory)) {
         fs::create_directories(data.outputDirectory);
     }
-    
-    // Create error report
-    std::string reportPath = data.outputDirectory + "/error_report.txt";
-    data.reportFile.open(reportPath, std::ios::out);
-    data.reportFile << "========================================\n";
-    data.reportFile << "FILE TRANSMISSION ERROR REPORT\n";
-    data.reportFile << "========================================\n";
-    data.reportFile << "Started: " << __DATE__ << " " << __TIME__ << "\n";
-    data.reportFile << "Mode: STREAMING (on-the-fly writes)\n\n";
-    data.reportFile << "FILES RECEIVED:\n";
-    data.reportFile << "========================================\n\n";
-    data.reportFile.flush();
-    
-    printf("Output directory: %s\n", data.outputDirectory.c_str());
-    printf("Error report:     %s\n", reportPath.c_str());
-    printf("Streaming mode active - writing to disk on-the-fly...\n\n");
-    
+
+    data.reportPath = data.outputDirectory + "/error_report.txt";
+
+    // Write report header (overwrite any old file)
+    {
+        std::ofstream rpt(data.reportPath, std::ios::out);
+        time_t now = time(nullptr);
+        char tbuf[32];
+        strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+        rpt << "========================================\n";
+        rpt << "FILE TRANSMISSION ERROR REPORT\n";
+        rpt << "========================================\n";
+        rpt << "Started: " << tbuf << "\n";
+        rpt << "Mode: STREAMING (on-the-fly writes)\n\n";
+        rpt << "FILES RECEIVED:\n";
+        rpt << "========================================\n\n";
+    }
+
+    printf("[FileSink] Output directory : %s\n", data.outputDirectory.c_str());
+    printf("[FileSink] Error report     : %s\n", data.reportPath.c_str());
+    printf("[FileSink] Streaming mode active\n\n");
     return data;
 }
 
-void process_file_sink(int8_t* inputBatch, int actualCount, int8_t* outputBatch,
-                      int& actualOutputCount, FileSinkData& customData, const BlockConfig& config) {
-    
-    int packetSize = config.inputPacketSizes[0];
-    int dataSize = packetSize - 1;  // Last byte is error flag
-    
-    // Handle EOF signal
+void process_file_sink(
+    const char **pipeIn,
+    const char ** /*pipeOut*/,
+    FileSinkData &customData,
+    const BlockConfig &config
+) {
+    PipeIO input(pipeIn[0], config.inputPacketSizes[0], config.inputBatchSizes[0]);
+
+    int8_t *inputBatch = new int8_t[input.getBufferSize()];
+    int actualCount = input.read(inputBatch);
+
+    const int packetSize = input.getPacketSize(); // 1501
+    const int dataSize   = packetSize - 1;        // 1500 (last byte is error flag)
+
+    // ---- Handle EOF ----
     if (actualCount == 0) {
-        printf("Received EOF signal (0 packets)\n");
-        
+        printf("[FileSink] Received EOF (0 packets)\n");
         if (customData.currentFile.active && customData.currentFile.file.is_open()) {
             customData.currentFile.file.close();
             if (fs::exists(customData.currentFile.tempPath)) {
                 fs::rename(customData.currentFile.tempPath, customData.currentFile.finalPath);
             }
-            printf("Completed: %s\n", customData.currentFile.name.c_str());
+            append_to_report(customData.reportPath, customData.currentFile);
+            printf("[FileSink] Completed (EOF): %s\n", customData.currentFile.name.c_str());
             customData.filesReceived++;
             customData.currentFile.active = false;
         }
-        
+
+        // Write summary to report
+        {
+            std::ofstream rpt(customData.reportPath, std::ios::app);
+            time_t now = time(nullptr);
+            char tbuf[32];
+            strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+            rpt << "========================================\n";
+            rpt << "SUMMARY\n";
+            rpt << "========================================\n";
+            rpt << "Finished:     " << tbuf << "\n";
+            rpt << "Total files:  " << customData.filesReceived << "\n";
+            rpt << "Total errors: " << customData.totalErrorCount << "\n";
+            rpt << "========================================\n";
+        }
+
         printf("\n========================================\n");
         printf("ALL FILES RECEIVED\n");
         printf("========================================\n");
-        printf("Total files: %d\n", customData.filesReceived);
+        printf("Total files:  %d\n", customData.filesReceived);
+        printf("Total errors: %llu\n", (unsigned long long)customData.totalErrorCount);
         printf("========================================\n");
-        
-        actualOutputCount = 0;
-        return;
+
+        delete[] inputBatch;
+        throw std::runtime_error("All files received");
     }
-    
-    // Extract data from batch
+
+    // ---- Extract data + track errors ----
     std::vector<uint8_t> newData;
+    newData.reserve((size_t)actualCount * dataSize);
+
     for (int i = 0; i < actualCount; i++) {
         int offset = i * packetSize;
         for (int j = 0; j < dataSize; j++) {
             newData.push_back((uint8_t)((int32_t)inputBatch[offset + j] + 128));
         }
-        
-        // Track errors
+        // Last byte is error flag (non-zero = packet had a CRC error)
         if (inputBatch[offset + packetSize - 1] != 0) {
             customData.totalErrorCount++;
+            if (customData.currentFile.active) {
+                customData.currentFile.errorCount++;
+            }
         }
     }
-    
-    // Add to stream buffer
+
     customData.streamBuffer.insert(customData.streamBuffer.end(), newData.begin(), newData.end());
-    
-    // Process stream buffer
+
+    // ---- State machine: parse stream buffer ----
+    static int lastProgressPercent = -1;
+
     while (true) {
         if (!customData.currentFile.active) {
-            // Look for START flag
+            // ---- Look for START flag ----
             int startPos = find_pattern(customData.streamBuffer, START_FLAG, 4);
-            
+
             if (startPos < 0) {
-                if (customData.streamBuffer.size() > 4096) {
-                    customData.streamBuffer.erase(customData.streamBuffer.begin(), 
-                                                  customData.streamBuffer.end() - 4095);
+                // Trim to avoid unbounded growth
+                if ((int)customData.streamBuffer.size() > 4096) {
+                    customData.streamBuffer.erase(
+                        customData.streamBuffer.begin(),
+                        customData.streamBuffer.end() - 4095);
                 }
                 break;
             }
-            
-            // Parse metadata
+
             int metadataSize = 4 + (FILENAME_LENGTH * REPETITIONS) + (8 * REPETITIONS);
-            
-            if (customData.streamBuffer.size() < startPos + metadataSize) {
-                break;
-            }
-            
-            // Extract filename (majority vote)
+
+            if ((int)customData.streamBuffer.size() < startPos + metadataSize) break;
+
+            // Parse filename (majority vote across REPETITIONS)
             std::vector<std::string> fileNames;
             int nameStart = startPos + 4;
-            for (int i = 0; i < REPETITIONS; i++) {
+            for (int r = 0; r < REPETITIONS; r++) {
                 std::vector<uint8_t> nameBytes(FILENAME_LENGTH);
-                memcpy(nameBytes.data(), &customData.streamBuffer[nameStart + i * FILENAME_LENGTH], FILENAME_LENGTH);
-                
-                // Find null terminator
-                auto nullPos = std::find(nameBytes.begin(), nameBytes.end(), 0);
-                if (nullPos != nameBytes.end()) {
-                    nameBytes.erase(nullPos, nameBytes.end());
-                }
-                
+                memcpy(nameBytes.data(),
+                       &customData.streamBuffer[nameStart + r * FILENAME_LENGTH],
+                       FILENAME_LENGTH);
+                auto nullPos = std::find(nameBytes.begin(), nameBytes.end(), (uint8_t)0);
+                if (nullPos != nameBytes.end()) nameBytes.erase(nullPos, nameBytes.end());
                 fileNames.push_back(std::string(nameBytes.begin(), nameBytes.end()));
             }
             std::string fileName = majority_vote_string(fileNames);
-            
-            // Extract file size (mode)
-            std::vector<uint64_t> fileSizes;
-            int sizeStart = nameStart + (FILENAME_LENGTH * REPETITIONS);
-            for (int i = 0; i < REPETITIONS; i++) {
-                uint64_t size;
-                memcpy(&size, &customData.streamBuffer[sizeStart + i * 8], 8);
-                fileSizes.push_back(size);
-            }
-            
-            // Find mode (most common value)
+
+            // Parse file size (mode across REPETITIONS)
+            int sizeStart = nameStart + FILENAME_LENGTH * REPETITIONS;
             std::map<uint64_t, int> sizeCounts;
-            for (uint64_t size : fileSizes) sizeCounts[size]++;
-            uint64_t fileSize = 0;
-            int maxCount = 0;
-            for (const auto& pair : sizeCounts) {
-                if (pair.second > maxCount) {
-                    maxCount = pair.second;
-                    fileSize = pair.first;
-                }
+            for (int r = 0; r < REPETITIONS; r++) {
+                uint64_t sz;
+                memcpy(&sz, &customData.streamBuffer[sizeStart + r * 8], 8);
+                sizeCounts[sz]++;
             }
-            
-            // Create file paths
+            uint64_t fileSize = 0;
+            int maxCnt = 0;
+            for (const auto &kv : sizeCounts) {
+                if (kv.second > maxCnt) { maxCnt = kv.second; fileSize = kv.first; }
+            }
+
+            // Sanitise filename for filesystem
             std::string safeFileName = fileName;
-            // Remove invalid characters
-            std::replace_if(safeFileName.begin(), safeFileName.end(), 
-                          [](char c) { return c == '\\' || c == '/' || c == ':' || 
-                                             c == '*' || c == '?' || c == '"' || 
-                                             c == '<' || c == '>' || c == '|'; }, '_');
-            
-            std::string tempPath = customData.outputDirectory + "/" + safeFileName + ".part";
+            std::replace_if(safeFileName.begin(), safeFileName.end(),
+                [](char c) { return c=='\\' || c=='/' || c==':' ||
+                                     c=='*'  || c=='?' || c=='"' ||
+                                     c=='<'  || c=='>' || c=='|'; }, '_');
+
+            std::string tempPath  = customData.outputDirectory + "/" + safeFileName + ".part";
             std::string finalPath = customData.outputDirectory + "/" + safeFileName;
-            
-            // Open file
+
             customData.currentFile.file.open(tempPath, std::ios::binary);
             if (!customData.currentFile.file) {
-                fprintf(stderr, "Cannot create file: %s\n", tempPath.c_str());
+                fprintf(stderr, "[FileSink] Cannot create: %s\n", tempPath.c_str());
                 break;
             }
-            
-            printf("Started streaming: %s (%.2f MB)\n", fileName.c_str(), fileSize / 1e6);
-            
-            customData.currentFile.active = true;
-            customData.currentFile.name = fileName;
-            customData.currentFile.tempPath = tempPath;
-            customData.currentFile.finalPath = finalPath;
+
+            printf("[FileSink] Started: %s (%.2f MB)\n", fileName.c_str(), fileSize / 1e6);
+
+            customData.currentFile.active       = true;
+            customData.currentFile.name         = fileName;
+            customData.currentFile.tempPath     = tempPath;
+            customData.currentFile.finalPath    = finalPath;
             customData.currentFile.expectedSize = fileSize;
             customData.currentFile.writtenBytes = 0;
-            customData.currentFile.errorCount = 0;
-            
-            // Remove metadata from buffer
+            customData.currentFile.errorCount   = 0;
+            lastProgressPercent                 = -1;
+
             int dataStart = startPos + metadataSize;
-            customData.streamBuffer.erase(customData.streamBuffer.begin(), 
-                                         customData.streamBuffer.begin() + dataStart);
-            
+            customData.streamBuffer.erase(customData.streamBuffer.begin(),
+                                          customData.streamBuffer.begin() + dataStart);
+
         } else {
-            // Write data to file
-            uint64_t remainingBytes = customData.currentFile.expectedSize - 
-                                     customData.currentFile.writtenBytes;
-            
-            if (remainingBytes <= 0) {
-                // File complete - look for END flag
-                if (customData.streamBuffer.size() >= 4) {
-                    bool endFlagMatch = memcmp(customData.streamBuffer.data(), END_FLAG, 4) == 0;
-                    
-                    if (endFlagMatch) {
-                        customData.streamBuffer.erase(customData.streamBuffer.begin(), 
-                                                     customData.streamBuffer.begin() + 4);
-                        
-                        customData.currentFile.file.close();
-                        fs::rename(customData.currentFile.tempPath, customData.currentFile.finalPath);
-                        
-                        printf("Completed: %s (%.2f MB)", customData.currentFile.name.c_str(), 
-                               customData.currentFile.expectedSize / 1e6);
-                        
-                        if (customData.currentFile.errorCount > 0) {
-                            double errorRate = 100.0 * customData.currentFile.errorCount / 
-                                             customData.currentFile.expectedSize;
-                            printf(" - ⚠ %d errors (%.4f%%)\n", 
-                                   customData.currentFile.errorCount, errorRate);
-                        } else {
-                            printf(" - ✓ Clean\n");
-                        }
-                        
-                        customData.filesReceived++;
-                        customData.currentFile.active = false;
+            uint64_t remaining = customData.currentFile.expectedSize -
+                                 customData.currentFile.writtenBytes;
+
+            if (remaining == 0) {
+                // ---- Look for END flag ----
+                if ((int)customData.streamBuffer.size() < 4) break;
+
+                if (memcmp(customData.streamBuffer.data(), END_FLAG, 4) == 0) {
+                    customData.streamBuffer.erase(customData.streamBuffer.begin(),
+                                                  customData.streamBuffer.begin() + 4);
+
+                    customData.currentFile.file.close();
+                    fs::rename(customData.currentFile.tempPath, customData.currentFile.finalPath);
+
+                    // ---- Write entry to error report ----
+                    append_to_report(customData.reportPath, customData.currentFile);
+
+                    printf("[FileSink] Completed: %s (%.2f MB)",
+                           customData.currentFile.name.c_str(),
+                           (double)customData.currentFile.expectedSize / 1e6);
+                    if (customData.currentFile.errorCount > 0) {
+                        double errRate = 100.0 * (double)customData.currentFile.errorCount /
+                                                 (double)customData.currentFile.expectedSize;
+                        printf(" - %llu errors (%.4f%%)\n",
+                               (unsigned long long)customData.currentFile.errorCount, errRate);
                     } else {
-                        fprintf(stderr, "WARNING: END flag mismatch for %s\n", 
-                               customData.currentFile.name.c_str());
-                        customData.currentFile.file.close();
-                        customData.currentFile.active = false;
-                        customData.streamBuffer.erase(customData.streamBuffer.begin(), 
-                                                     customData.streamBuffer.begin() + 4);
+                        printf(" - Clean\n");
                     }
+
+                    customData.filesReceived++;
+                    customData.currentFile.active = false;
                 } else {
-                    break;
+                    fprintf(stderr, "[FileSink] WARNING: END flag mismatch for %s\n",
+                            customData.currentFile.name.c_str());
+                    customData.currentFile.file.close();
+                    append_to_report(customData.reportPath, customData.currentFile);
+                    customData.currentFile.active = false;
+                    customData.streamBuffer.erase(customData.streamBuffer.begin(),
+                                                  customData.streamBuffer.begin() + 4);
                 }
             } else {
-                // Write available data
-                int bytesToWrite = std::min((uint64_t)customData.streamBuffer.size(), remainingBytes);
-                
-                if (bytesToWrite > 0) {
-                    customData.currentFile.file.write((char*)customData.streamBuffer.data(), bytesToWrite);
-                    customData.currentFile.writtenBytes += bytesToWrite;
-                    customData.streamBuffer.erase(customData.streamBuffer.begin(), 
-                                                 customData.streamBuffer.begin() + bytesToWrite);
-                    
-                    // Show progress at 10% intervals
-                    int progress = (int)(100.0 * customData.currentFile.writtenBytes / 
-                                        customData.currentFile.expectedSize);
-                    static int lastProgress = -1;
-                    if (progress % 10 == 0 && progress != lastProgress) {
-                        printf("  Progress: %s - %d%% (%.2f MB / %.2f MB)\n",
-                               customData.currentFile.name.c_str(), progress,
-                               customData.currentFile.writtenBytes / 1e6,
-                               customData.currentFile.expectedSize / 1e6);
-                        lastProgress = progress;
-                    }
-                } else {
-                    break;
+                // ---- Write available data ----
+                uint64_t bytesToWrite = std::min((uint64_t)customData.streamBuffer.size(), remaining);
+                if (bytesToWrite == 0) break;
+
+                customData.currentFile.file.write(
+                    (const char *)customData.streamBuffer.data(), (std::streamsize)bytesToWrite);
+                customData.currentFile.writtenBytes += bytesToWrite;
+                customData.streamBuffer.erase(customData.streamBuffer.begin(),
+                                              customData.streamBuffer.begin() + bytesToWrite);
+
+                int progress = (int)(100.0 * customData.currentFile.writtenBytes /
+                                             customData.currentFile.expectedSize);
+                if (progress % 10 == 0 && progress != lastProgressPercent) {
+                    printf("[FileSink]   %s - %d%% (%.2f / %.2f MB)\n",
+                           customData.currentFile.name.c_str(), progress,
+                           (double)customData.currentFile.writtenBytes / 1e6,
+                           (double)customData.currentFile.expectedSize / 1e6);
+                    lastProgressPercent = progress;
                 }
             }
         }
     }
-    
-    actualOutputCount = 0;
+
+    delete[] inputBatch;
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Usage: file_sink <pipeIn>\n");
         return 1;
     }
-    
-    const char* pipeIn = argv[1];
-    
+    const char *pipeIn = argv[1];
+
     BlockConfig config = {
-        "FileSink",         // name
-        1,                  // inputs
-        0,                  // outputs
-        {1501},             // inputPacketSizes
-        {44740},            // inputBatchSizes
-        {},                 // outputPacketSizes
-        {},                 // outputBatchSizes
-        false,              // ltr
-        true,               // startWithAll (AUTO-START)
-        "Streaming file sink with on-the-fly disk writes"  // description
+        "FileSink",             // name
+        1,                      // inputs
+        0,                      // outputs
+        {1501},                 // inputPacketSizes
+        {6000},                // inputBatchSizes
+        {},                     // outputPacketSizes
+        {},                     // outputBatchSizes
+        true,                   // ltr
+        true,                   // startWithAll
+        "Streaming file sink with error tracking and on-completion error report"
     };
-    
-    run_generic_block(&pipeIn, nullptr, config, process_file_sink, init_file_sink);
-    
+
+    run_manual_block(&pipeIn, nullptr, config, process_file_sink, init_file_sink);
     return 0;
 }

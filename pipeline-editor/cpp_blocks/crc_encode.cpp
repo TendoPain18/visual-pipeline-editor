@@ -1,7 +1,6 @@
 #include "core/run_generic_block.h"
 #include <vector>
 
-// CRC-32 table builder
 std::vector<uint32_t> build_crc32_table() {
     std::vector<uint32_t> table(256);
     uint32_t poly = 0xEDB88320;
@@ -20,7 +19,6 @@ std::vector<uint32_t> build_crc32_table() {
     return table;
 }
 
-// Calculate CRC-32
 uint32_t calculate_crc32(const uint8_t* data, int length, const std::vector<uint32_t>& table) {
     uint32_t crc = 0xFFFFFFFF;
     for (int i = 0; i < length; i++) {
@@ -30,28 +28,37 @@ uint32_t calculate_crc32(const uint8_t* data, int length, const std::vector<uint
     return crc ^ 0xFFFFFFFF;
 }
 
-// Custom data structure
 struct CrcEncodeData {
     std::vector<uint32_t> crcTable;
 };
 
-// Initialization function
 CrcEncodeData init_crc_encode(const BlockConfig& config) {
     CrcEncodeData data;
     data.crcTable = build_crc32_table();
     return data;
 }
 
-// Processing function
-void process_crc_encode(int8_t* inputBatch, int actualCount, int8_t* outputBatch, 
-                       int& actualOutputCount, CrcEncodeData& customData, const BlockConfig& config) {
+void process_crc_encode(
+    const char** pipeIn,
+    const char** pipeOut,
+    CrcEncodeData& customData,
+    const BlockConfig& config
+) {
+    // Create I/O handlers
+    PipeIO input(pipeIn[0], config.inputPacketSizes[0], config.inputBatchSizes[0]);
+    PipeIO output(pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]);
     
-    int inputPacketSize = config.inputPacketSizes[0];
-    int outputPacketSize = config.outputPacketSizes[0];
-    int outputBatchSize = config.outputBatchSizes[0];
+    // Allocate buffers
+    int8_t* inputBatch = new int8_t[input.getBufferSize()];
+    int8_t* outputBatch = new int8_t[output.getBufferSize()];
     
-    // Clear output
-    memset(outputBatch, 0, outputBatchSize * outputPacketSize);
+    // MANUAL READ - Block decides when to read
+    int actualCount = input.read(inputBatch);
+    
+    int inputPacketSize = input.getPacketSize();
+    int outputPacketSize = output.getPacketSize();
+    
+    memset(outputBatch, 0, output.getBufferSize());
     
     // Process each packet
     for (int i = 0; i < actualCount; i++) {
@@ -61,18 +68,22 @@ void process_crc_encode(int8_t* inputBatch, int actualCount, int8_t* outputBatch
         // Copy input data
         memcpy(outputBatch + outputOffset, inputBatch + inputOffset, inputPacketSize);
         
-        // Calculate CRC on uint8 data
+        // Calculate CRC
         uint8_t* dataAsUint8 = (uint8_t*)(inputBatch + inputOffset);
         uint32_t crc = calculate_crc32(dataAsUint8, inputPacketSize, customData.crcTable);
         
-        // Append CRC as 4 bytes (little-endian)
+        // Append CRC as 4 bytes
         uint8_t* crcBytes = (uint8_t*)&crc;
         for (int j = 0; j < 4; j++) {
             outputBatch[outputOffset + inputPacketSize + j] = (int8_t)((int32_t)crcBytes[j] - 128);
         }
     }
     
-    actualOutputCount = actualCount;
+    // MANUAL WRITE - Block decides when to write
+    output.write(outputBatch, actualCount);
+    
+    delete[] inputBatch;
+    delete[] outputBatch;
 }
 
 int main(int argc, char* argv[]) {
@@ -89,15 +100,15 @@ int main(int argc, char* argv[]) {
         1,                  // inputs
         1,                  // outputs
         {1500},             // inputPacketSizes
-        {44740},            // inputBatchSizes
+        {6000},            // inputBatchSizes
         {1504},             // outputPacketSizes
-        {44740},            // outputBatchSizes
+        {6000},            // outputBatchSizes
         true,               // ltr
         true,               // startWithAll (AUTO-START)
         "CRC-32 encoder (ITU-T V.42) - batch processing"  // description
     };
     
-    run_generic_block(&pipeIn, &pipeOut, config, process_crc_encode, init_crc_encode);
+    run_manual_block(&pipeIn, &pipeOut, config, process_crc_encode, init_crc_encode);
     
     return 0;
 }

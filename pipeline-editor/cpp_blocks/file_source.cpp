@@ -6,7 +6,6 @@
 
 namespace fs = std::filesystem;
 
-// File protocol constants
 const uint8_t START_FLAG[] = {0xAA, 0x55, 0xAA, 0x55};
 const uint8_t END_FLAG[] = {0x55, 0xAA, 0x55, 0xAA};
 const int FILENAME_LENGTH = 256;
@@ -24,14 +23,12 @@ FileSourceData init_file_source(const BlockConfig& config) {
     data.sourceDirectory = "Test_Files";
     data.currentFileIdx = 0;
     
-    // Check if directory exists
     if (!fs::exists(data.sourceDirectory)) {
         fs::create_directories(data.sourceDirectory);
         fprintf(stderr, "Created source directory. Add files and restart.\n");
         exit(1);
     }
     
-    // Get file list
     for (const auto& entry : fs::directory_iterator(data.sourceDirectory)) {
         if (entry.is_regular_file()) {
             data.filePaths.push_back(entry.path().string());
@@ -48,12 +45,21 @@ FileSourceData init_file_source(const BlockConfig& config) {
     return data;
 }
 
-void process_file_source(int8_t* inputBatch, int actualCount, int8_t* outputBatch,
-                        int& actualOutputCount, FileSourceData& customData, const BlockConfig& config) {
+void process_file_source(
+    const char** pipeIn,
+    const char** pipeOut,
+    FileSourceData& customData,
+    const BlockConfig& config
+) {
+    // Create output pipe handler
+    PipeIO output(pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]);
     
-    int packetSize = config.outputPacketSizes[0];
-    int batchSize = config.outputBatchSizes[0];
+    int packetSize = output.getPacketSize();
+    int batchSize = output.getBatchSize();
     int totalBatchBytes = batchSize * packetSize;
+    
+    // Allocate output buffer
+    int8_t* outputBatch = new int8_t[output.getBufferSize()];
     
     // Fill buffer with files
     while (customData.currentFileIdx < customData.filePaths.size() && 
@@ -62,7 +68,6 @@ void process_file_source(int8_t* inputBatch, int actualCount, int8_t* outputBatc
         std::string filePath = customData.filePaths[customData.currentFileIdx];
         std::string fileName = fs::path(filePath).filename().string();
         
-        // Read file
         std::ifstream file(filePath, std::ios::binary);
         if (!file) {
             fprintf(stderr, "Cannot open: %s (skipping)\n", fileName.c_str());
@@ -82,10 +87,8 @@ void process_file_source(int8_t* inputBatch, int actualCount, int8_t* outputBatc
         // Build file packet
         std::vector<uint8_t> fileStream;
         
-        // Start flag
         fileStream.insert(fileStream.end(), START_FLAG, START_FLAG + 4);
         
-        // File name (repeated)
         for (int rep = 0; rep < REPETITIONS; rep++) {
             std::vector<uint8_t> nameBytes(FILENAME_LENGTH, 0);
             int nameLen = std::min((int)fileName.length(), FILENAME_LENGTH);
@@ -93,17 +96,13 @@ void process_file_source(int8_t* inputBatch, int actualCount, int8_t* outputBatc
             fileStream.insert(fileStream.end(), nameBytes.begin(), nameBytes.end());
         }
         
-        // File size (repeated)
         for (int rep = 0; rep < REPETITIONS; rep++) {
             uint64_t size64 = fileSize;
             uint8_t* sizeBytes = (uint8_t*)&size64;
             fileStream.insert(fileStream.end(), sizeBytes, sizeBytes + 8);
         }
         
-        // File data
         fileStream.insert(fileStream.end(), fileData.begin(), fileData.end());
-        
-        // End flag
         fileStream.insert(fileStream.end(), END_FLAG, END_FLAG + 4);
         
         customData.streamBuffer.insert(customData.streamBuffer.end(), 
@@ -130,34 +129,33 @@ void process_file_source(int8_t* inputBatch, int actualCount, int8_t* outputBatc
         throw std::runtime_error("All files transmitted");
     }
     
-    // Send batch from buffer
+    // Prepare batch
     int availableBytes = customData.streamBuffer.size();
     int maxPacketsFromBuffer = (availableBytes + packetSize - 1) / packetSize;
     int packetsInThisBatch = std::min(batchSize, maxPacketsFromBuffer);
     
     if (packetsInThisBatch == 0) {
-        actualOutputCount = 0;
+        delete[] outputBatch;
         return;
     }
     
-    // Clear output
-    memset(outputBatch, 0, batchSize * packetSize);
-    
+    memset(outputBatch, 0, output.getBufferSize());
     int bytesToSend = std::min(packetsInThisBatch * packetSize, availableBytes);
     
-    // Copy data from buffer
     for (int i = 0; i < bytesToSend; i++) {
         outputBatch[i] = (int8_t)((int32_t)customData.streamBuffer[i] - 128);
     }
     
-    // Remove sent data from buffer
     customData.streamBuffer.erase(customData.streamBuffer.begin(), 
                                    customData.streamBuffer.begin() + bytesToSend);
     
-    actualOutputCount = packetsInThisBatch;
-    
     printf("Sending batch (%d packets, buffer remaining: %.2f KB)\n",
            packetsInThisBatch, customData.streamBuffer.size() / 1024.0);
+    
+    // MANUAL WRITE - Block controls when to send
+    output.write(outputBatch, packetsInThisBatch);
+    
+    delete[] outputBatch;
 }
 
 int main(int argc, char* argv[]) {
@@ -175,13 +173,13 @@ int main(int argc, char* argv[]) {
         {},                 // inputPacketSizes
         {},                 // inputBatchSizes
         {1500},             // outputPacketSizes
-        {44740},            // outputBatchSizes
+        {6000},            // outputBatchSizes
         true,               // ltr
         false,              // startWithAll (manual start for sources)
         "Progressive file loading with continuous buffering"  // description
     };
     
-    run_generic_block(nullptr, &pipeOut, config, process_file_source, init_file_source);
+    run_manual_block(nullptr, &pipeOut, config, process_file_source, init_file_source);
     
     return 0;
 }

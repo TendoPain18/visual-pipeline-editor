@@ -1,246 +1,199 @@
 function run_generic_block(pipeIn, pipeOut, block_config, process_fn, init_fn)
-% RUN_GENERIC_BLOCK - Generic block executor framework
-% Handles all boilerplate: sockets, batch I/O, metrics, error handling
+% RUN_MANUAL_BLOCK  Full manual I/O control — mirrors C++ run_generic_block.
+%
+% Unlike run_generic_block (which auto-reads one input, calls process_fn,
+% auto-writes one output), this hands your process_fn a cell array of PipeIO
+% objects and lets it call read/write in any order it needs.
+%
+% Usage in your block file:
+%
+%   function my_block(pipeIn1, pipeIn2, pipeOut1, pipeOut2)
+%       block_config = struct(
+%           'name',             'MyBlock',
+%           'inputs',           2,
+%           'outputs',          2,
+%           'inputPacketSizes', [1515, 3],
+%           'inputBatchSizes',  [44740, 44740],
+%           ...
+%       );
+%       run_generic_block(
+%           {pipeIn1, pipeIn2},
+%           {pipeOut1, pipeOut2},
+%           block_config,
+%           @process_fn,
+%           @init_fn
+%       );
+%   end
+%
+%   function process_fn(pipeIn, pipeOut, customData, config)
+%       % pipeIn{1}, pipeIn{2} ... are PipeIO objects
+%       % Call read/write in whatever order you need:
+%       [sig, n]  = pipeIn{2}.read();     % read signal first
+%       pipeOut{2}.write(sig, n);          % forward it
+%       [dat, ~]  = pipeIn{1}.read();     % THEN read data
+%       pipeOut{1}.write(result, n);       % write result
+%   end
+%
+% Inputs:
+%   pipeIn       cell array of pipe name strings  ({} for sources)
+%   pipeOut      cell array of pipe name strings  ({} for sinks)
+%   block_config struct with fields: name, inputs, outputs,
+%                inputPacketSizes, inputBatchSizes,
+%                outputPacketSizes, outputBatchSizes,
+%                LTR, startWithAll
+%   process_fn   function(pipeInObjs, pipeOutObjs, customData, config)
+%                returns nothing — calls read/write directly
+%   init_fn      (optional) function(config) -> customData
 
-    % Parse configuration
-    config = parse_block_config(block_config);
-    
-    % Determine block type
-    isSource = isempty(pipeIn) || config.inputs == 0;
-    isSink = isempty(pipeOut) || config.outputs == 0;
-    
-    % Calculate batch parameters
-    if ~isSource
-        INPUT_PACKET_SIZE = config.inputPacketSizes(1);
-        INPUT_BATCH_SIZE = config.inputBatchSizes(1);
-        INPUT_LENGTH_BYTES = calculate_length_bytes(INPUT_BATCH_SIZE);
-        INPUT_BUFFER_SIZE = INPUT_LENGTH_BYTES + (INPUT_PACKET_SIZE * INPUT_BATCH_SIZE);
-    end
-    
-    if ~isSink
-        OUTPUT_PACKET_SIZE = config.outputPacketSizes(1);
-        OUTPUT_BATCH_SIZE = config.outputBatchSizes(1);
-        OUTPUT_LENGTH_BYTES = calculate_length_bytes(OUTPUT_BATCH_SIZE);
-        OUTPUT_BUFFER_SIZE = OUTPUT_LENGTH_BYTES + (OUTPUT_PACKET_SIZE * OUTPUT_BATCH_SIZE);
-    end
-    
-    % Print block info
+    config   = parseConfig(block_config);
+    isSource = isempty(pipeIn)  || config.inputs  == 0;
+    isSink   = isempty(pipeOut) || config.outputs == 0;
+
+    %% Banner
     fprintf('\n========================================\n');
-    fprintf('%s - Generic Block Framework\n', config.name);
+    fprintf('%s - MANUAL I/O MODE\n', config.name);
     fprintf('========================================\n');
     if ~isSource
-        fprintf('INPUT:  %d bytes × %d packets (header: %dB, total: %.2fKB)\n', ...
-                INPUT_PACKET_SIZE, INPUT_BATCH_SIZE, INPUT_LENGTH_BYTES, INPUT_BUFFER_SIZE/1024);
+        for i = 1:config.inputs
+            bs = config.inputLengthBytes(i) + config.inputPacketSizes(i)*config.inputBatchSizes(i);
+            fprintf('  Input  %d: %d bytes x %d pkts = %.2f KB\n', ...
+                i, config.inputPacketSizes(i), config.inputBatchSizes(i), bs/1024);
+        end
     end
     if ~isSink
-        fprintf('OUTPUT: %d bytes × %d packets (header: %dB, total: %.2fKB)\n', ...
-                OUTPUT_PACKET_SIZE, OUTPUT_BATCH_SIZE, OUTPUT_LENGTH_BYTES, OUTPUT_BUFFER_SIZE/1024);
-    end
-    fprintf('========================================\n');
-    
-    % Get instance-specific MATLAB port from environment
-    matlabPortStr = getenv('MATLAB_PORT');
-    if ~isempty(matlabPortStr)
-        matlabPort = str2double(matlabPortStr);
-    else
-        matlabPort = config.socketPort;
-    end
-    
-    % Connect to socket
-    socketObj = matlab_socket_client(config.socketHost, matlabPort, 10);
-    if isempty(socketObj)
-        error('Failed to connect to socket server. Make sure Electron is running!');
-    end
-    
-    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
-    
-    try
-        % Optional custom initialization
-        customData = [];
-        if nargin >= 5 && ~isempty(init_fn)
-            fprintf('Running custom initialization...\n');
-            customData = init_fn(config);
+        for i = 1:config.outputs
+            bs = config.outputLengthBytes(i) + config.outputPacketSizes(i)*config.outputBatchSizes(i);
+            fprintf('  Output %d: %d bytes x %d pkts = %.2f KB\n', ...
+                i, config.outputPacketSizes(i), config.outputBatchSizes(i), bs/1024);
         end
-        
-        send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
-        
-        % Metrics tracking
-        batchCount = 0;
-        totalBytes = 0;
-        startTime = tic;
-        lastTime = 0;
-        lastBytes = 0;
-        
-        % Main processing loop
+    end
+    fprintf('========================================\n\n');
+
+    %% Socket
+    matlabPortEnv = getenv('MATLAB_PORT');
+    if ~isempty(matlabPortEnv)
+        socketPort = str2double(matlabPortEnv);
+    else
+        socketPort = config.socketPort;
+    end
+    socketObj = matlab_socket_client(config.socketHost, socketPort, 10);
+    if isempty(socketObj)
+        error('[%s] Failed to connect to socket server.', config.name);
+    end
+    send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
+
+    %% Build PipeIO objects
+    inObjs  = {};
+    outObjs = {};
+    if ~isSource
+        inCell = toCellStr(pipeIn);
+        for i = 1:config.inputs
+            inObjs{i} = PipeIO(inCell{i}, config.inputPacketSizes(i), config.inputBatchSizes(i));
+        end
+    end
+    if ~isSink
+        outCell = toCellStr(pipeOut);
+        for i = 1:config.outputs
+            outObjs{i} = PipeIO(outCell{i}, config.outputPacketSizes(i), config.outputBatchSizes(i));
+        end
+    end
+
+    %% Init
+    customData = [];
+    if nargin >= 5 && ~isempty(init_fn)
+        fprintf('Running custom initialization...\n');
+        customData = init_fn(config);
+    end
+    send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
+
+    %% Metrics
+    iterCount  = 0;
+    totalBytes = 0;
+    tStart     = tic;
+    lastTime   = 0;
+    lastBytes  = 0;
+
+    %% Main loop
+    try
         while true
-            try
-                % Read input batch (if not a source)
-                inputBatch = [];
-                actualInputCount = 0;
-                
-                if ~isSource
-                    inputBuffer = pipeline_mex('read', pipeIn, INPUT_BUFFER_SIZE);
-                    
-                    % Parse length header
-                    for i = 1:INPUT_LENGTH_BYTES
-                        actualInputCount = actualInputCount + double(uint8(int32(inputBuffer(i)) + 128)) * (256^(i-1));
-                    end
-                    
-                    % Extract input batch data
-                    inputBatch = inputBuffer(INPUT_LENGTH_BYTES + 1 : end);
-                end
-                
-                % Call user's processing function
-                [outputBatch, actualOutputCount] = process_fn(inputBatch, actualInputCount, customData, config);
-                
-                % Write output batch (if not a sink)
-                if ~isSink && ~isempty(outputBatch)
-                    write_batch(pipeOut, outputBatch, actualOutputCount, OUTPUT_LENGTH_BYTES);
-                end
-                
-                batchCount = batchCount + 1;
-                
-                % Calculate throughput
-                if ~isSink
-                    totalBytes = totalBytes + OUTPUT_BUFFER_SIZE;
-                elseif ~isSource
-                    totalBytes = totalBytes + INPUT_BUFFER_SIZE;
-                end
-                
-                currentTime = toc(startTime);
-                elapsed = currentTime - lastTime;
-                if elapsed > 0
-                    instantGbps = ((totalBytes - lastBytes) * 8 / 1e9) / elapsed;
-                else
-                    instantGbps = 0;
-                end
-                lastTime = currentTime;
-                lastBytes = totalBytes;
-                
-                % Send metrics
-                metrics = struct();
-                metrics.frames = batchCount;
-                metrics.gbps = instantGbps;
-                metrics.totalGB = totalBytes / 1e9;
-                send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
-                
-                % Progress update (reduced frequency)
-                if mod(batchCount, 100) == 0
-                    fprintf('Batches: %d, Throughput: %.2f Gbps\n', batchCount, instantGbps);
-                end
-                
-            catch ME
-                if strcmp(ME.identifier, 'MATLAB:MEX:ErrMsgTxt') || contains(ME.message, 'All files transmitted')
-                    % Pipeline closed or source finished - graceful shutdown
-                    fprintf('\n========================================\n');
-                    fprintf('BLOCK FINISHED\n');
-                    fprintf('========================================\n');
-                    fprintf('Total batches: %d\n', batchCount);
-                    fprintf('Total data: %.2f GB\n', totalBytes / 1e9);
-                    fprintf('========================================\n');
-                    
-                    % For sources that finish, send EOF signal to downstream
-                    if isSource && ~isSink
-                        fprintf('Sending EOF signal (0-length batch)...\n');
-                        emptyBatch = zeros(OUTPUT_BATCH_SIZE * OUTPUT_PACKET_SIZE, 1, 'int8');
-                        write_batch(pipeOut, emptyBatch, 0, OUTPUT_LENGTH_BYTES);
-                    end
-                    
-                    send_socket_message(socketObj, 'BLOCK_STOPPED', config.blockId, config.name, '');
-                    clear socketObj;
-                    return;
-                else
-                    rethrow(ME);
-                end
+            process_fn(inObjs, outObjs, customData, config);
+            iterCount = iterCount + 1;
+
+            if ~isSink && config.outputs > 0
+                totalBytes = totalBytes + config.outputLengthBytes(1) + ...
+                    config.outputPacketSizes(1) * config.outputBatchSizes(1);
+            elseif ~isSource && config.inputs > 0
+                totalBytes = totalBytes + config.inputLengthBytes(1) + ...
+                    config.inputPacketSizes(1) * config.inputBatchSizes(1);
+            end
+
+            now     = toc(tStart);
+            elapsed = now - lastTime;
+            if elapsed > 0
+                gbps = ((totalBytes - lastBytes) * 8 / 1e9) / elapsed;
+            else
+                gbps = 0;
+            end
+            lastTime  = now;
+            lastBytes = totalBytes;
+
+            m = struct('frames', iterCount, 'gbps', gbps, 'totalGB', totalBytes/1e9);
+            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, m);
+
+            if mod(iterCount, 100) == 0
+                fprintf('Iterations: %d, Throughput: %.2f Gbps\n', iterCount, gbps);
             end
         end
-        
     catch ME
-        send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
-        clear socketObj;
-        rethrow(ME);
+        if strcmp(ME.identifier, 'MATLAB:MEX:ErrMsgTxt') || ...
+           contains(ME.message, 'All files transmitted') || ...
+           contains(ME.message, 'Block finished')
+            fprintf('\n[%s] Finished. Iterations: %d, Data: %.2f GB\n', ...
+                config.name, iterCount, totalBytes/1e9);
+            send_socket_message(socketObj, 'BLOCK_STOPPED', config.blockId, config.name, '');
+            clear socketObj;
+            return;
+        else
+            send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
+            clear socketObj;
+            rethrow(ME);
+        end
     end
 end
 
-function lengthBytes = calculate_length_bytes(maxCount)
-    if maxCount <= 255
-        lengthBytes = 1;
-    elseif maxCount <= 65535
-        lengthBytes = 2;
-    elseif maxCount <= 16777215
-        lengthBytes = 3;
-    else
-        lengthBytes = 4;
+%% ─── Helpers ────────────────────────────────────────────────────────────────
+
+function config = parseConfig(bc)
+    config = bc;
+    bid = getenv('BLOCK_ID');
+    if isempty(bid); config.blockId = 0; else; config.blockId = str2double(bid); end
+    if ~isfield(config,'socketHost'); config.socketHost = 'localhost'; end
+    if ~isfield(config,'socketPort'); config.socketPort = 9001;        end
+
+    % Normalise to row vectors
+    flds = {'inputPacketSizes','inputBatchSizes','outputPacketSizes','outputBatchSizes'};
+    for k = 1:numel(flds)
+        f = flds{k};
+        if isfield(config, f); config.(f) = config.(f)(:)'; end
+    end
+
+    % Pre-compute length bytes
+    if isfield(config,'inputBatchSizes')
+        config.inputLengthBytes = arrayfun(@lb, config.inputBatchSizes);
+    end
+    if isfield(config,'outputBatchSizes')
+        config.outputLengthBytes = arrayfun(@lb, config.outputBatchSizes);
     end
 end
 
-function write_batch(pipeOut, batchData, actualCount, lengthBytes)
-    bufferSize = lengthBytes + length(batchData);
-    buffer = zeros(bufferSize, 1, 'int8');
-    
-    % Write length header (little-endian)
-    count32 = uint32(actualCount);
-    for i = 1:lengthBytes
-        byteVal = bitand(bitshift(count32, -(i-1)*8), uint32(0xFF));
-        buffer(i) = int8(int32(byteVal) - 128);
+function n = lb(maxCount)
+    if     maxCount <= 255;       n = 1;
+    elseif maxCount <= 65535;     n = 2;
+    elseif maxCount <= 16777215;  n = 3;
+    else;                         n = 4;
     end
-    
-    % Write batch data
-    buffer(lengthBytes + 1 : end) = batchData;
-    
-    pipeline_mex('write', pipeOut, buffer);
 end
 
-function config = parse_block_config(block_config)
-    config = block_config;
-    blockIdStr = getenv('BLOCK_ID');
-    if isempty(blockIdStr)
-        config.blockId = 0;
-    else
-        config.blockId = str2double(blockIdStr);
-    end
-    
-    % Set defaults
-    if ~isfield(config, 'socketHost')
-        config.socketHost = 'localhost';
-    end
-    if ~isfield(config, 'socketPort')
-        config.socketPort = 9001;
-    end
-    
-    % Validate required fields
-    if ~isfield(config, 'name')
-        error('block_config must have a name field');
-    end
-    if ~isfield(config, 'inputs')
-        error('block_config must have an inputs field');
-    end
-    if ~isfield(config, 'outputs')
-        error('block_config must have an outputs field');
-    end
-    
-    % Convert to arrays
-    if config.inputs > 0
-        if ~isfield(config, 'inputPacketSizes') || ~isfield(config, 'inputBatchSizes')
-            error('Blocks with inputs must specify inputPacketSizes and inputBatchSizes');
-        end
-        if ~iscell(config.inputPacketSizes) && ~ismatrix(config.inputPacketSizes)
-            config.inputPacketSizes = [config.inputPacketSizes];
-        end
-        if ~iscell(config.inputBatchSizes) && ~ismatrix(config.inputBatchSizes)
-            config.inputBatchSizes = [config.inputBatchSizes];
-        end
-    end
-    
-    if config.outputs > 0
-        if ~isfield(config, 'outputPacketSizes') || ~isfield(config, 'outputBatchSizes')
-            error('Blocks with outputs must specify outputPacketSizes and outputBatchSizes');
-        end
-        if ~iscell(config.outputPacketSizes) && ~ismatrix(config.outputPacketSizes)
-            config.outputPacketSizes = [config.outputPacketSizes];
-        end
-        if ~iscell(config.outputBatchSizes) && ~ismatrix(config.outputBatchSizes)
-            config.outputBatchSizes = [config.outputBatchSizes];
-        end
-    end
+function c = toCellStr(x)
+    if iscell(x); c = x; else; c = {x}; end
 end
