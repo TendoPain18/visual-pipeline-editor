@@ -1,57 +1,65 @@
 ========================================
 FILE TRANSMISSION ERROR REPORT
 ========================================
-Generated: 15-Feb-2026 06:22:56
-Total files: 6
+Started: 15-Feb-2026 10:35:49
+Mode: STREAMING (on-the-fly writes)
+
+FILES RECEIVED:
 ========================================
 
-File 1: test0.txt [COMPLETE]
-  Expected Size: 5.32 KB
-  Actual Size:   5.32 KB
-  Packets:       5
-  Errors:        0
-  Error Rate:    0.00%
+[15-Feb-2026 10:36:12]
+File: radioconda-2025.03.14-Windows-x86_64.exe
+  Size:         628610940 bytes (628.61 MB)
+  Packets:      419074
+  Errors:       0
+  Error Rate:   0.0000%
+  Status:       CLEAN ✓
 
-File 2: test1.png [COMPLETE]
-  Expected Size: 72.49 KB
-  Actual Size:   72.49 KB
-  Packets:       51
-  Errors:        0
-  Error Rate:    0.00%
+[15-Feb-2026 10:36:12]
+File: test0.txt
+  Size:         5452 bytes (0.01 MB)
+  Packets:      4
+  Errors:       0
+  Error Rate:   0.0000%
+  Status:       CLEAN ✓
 
-File 3: test2.png [COMPLETE]
-  Expected Size: 46.38 KB
-  Actual Size:   46.38 KB
-  Packets:       33
-  Errors:        0
-  Error Rate:    0.00%
+[15-Feb-2026 10:36:12]
+File: test1.png
+  Size:         74231 bytes (0.07 MB)
+  Packets:      50
+  Errors:       0
+  Error Rate:   0.0000%
+  Status:       CLEAN ✓
 
-File 4: test3.png [COMPLETE]
-  Expected Size: 79.57 KB
-  Actual Size:   79.57 KB
-  Packets:       56
-  Errors:        0
-  Error Rate:    0.00%
+[15-Feb-2026 10:36:12]
+File: test2.png
+  Size:         47494 bytes (0.05 MB)
+  Packets:      32
+  Errors:       0
+  Error Rate:   0.0000%
+  Status:       CLEAN ✓
 
-File 5: test4.png [COMPLETE]
-  Expected Size: 146.91 KB
-  Actual Size:   146.91 KB
-  Packets:       102
-  Errors:        0
-  Error Rate:    0.00%
+[15-Feb-2026 10:36:12]
+File: test3.png
+  Size:         81480 bytes (0.08 MB)
+  Packets:      55
+  Errors:       0
+  Error Rate:   0.0000%
+  Status:       CLEAN ✓
 
-File 6: test5.png [COMPLETE]
-  Expected Size: 166.72 KB
-  Actual Size:   166.72 KB
-  Packets:       115
-  Errors:        0
-  Error Rate:    0.00%
+[15-Feb-2026 10:36:12]
+File: test4.png
+  Size:         150439 bytes (0.15 MB)
+  Packets:      101
+  Errors:       0
+  Error Rate:   0.0000%
+  Status:       CLEAN ✓
 
-========================================
-SUMMARY
-========================================
-Complete files:   6 / 6
-Total packets:    362
-Total errors:     0
-Overall error rate: 0.00%
-========================================
+[15-Feb-2026 10:36:12]
+File: test5.png
+  Size:         170723 bytes (0.17 MB)
+  Packets:      114
+  Errors:       0
+  Error Rate:   0.0000%
+  Status:       CLEAN ✓
+

@@ -454,8 +454,10 @@ const PipelineEditor = () => {
     const block = selectedBlocks[0];
     
     try {
+      // RE-PARSE the block with updated code
       const reparsedData = parseMatlabBlock(updatedCode, block.fileName);
       
+      // Calculate new port positions
       const newPortPositions = calculatePortPositions(
         reparsedData.inputs, 
         reparsedData.outputs, 
@@ -465,6 +467,7 @@ const PipelineEditor = () => {
         GRID_SIZE
       );
       
+      // Create updated block with ALL new batch processing fields
       const updatedBlock = { 
         ...block, 
         code: updatedCode,
@@ -472,11 +475,24 @@ const PipelineEditor = () => {
         inputs: reparsedData.inputs,
         outputs: reparsedData.outputs,
         config: reparsedData.config,
+        
+        // BATCH PROCESSING FIELDS (NEW)
+        inputPacketSizes: reparsedData.inputPacketSizes,
+        inputBatchSizes: reparsedData.inputBatchSizes,
+        outputPacketSizes: reparsedData.outputPacketSizes,
+        outputBatchSizes: reparsedData.outputBatchSizes,
+        inputBufferSizes: reparsedData.inputBufferSizes,
+        outputBufferSizes: reparsedData.outputBufferSizes,
+        inputLengthBytes: reparsedData.inputLengthBytes,
+        outputLengthBytes: reparsedData.outputLengthBytes,
+        
+        // Legacy fields (for backward compatibility)
         sizeRelation: reparsedData.sizeRelation,
         inputSize: reparsedData.inputSize,
         outputSize: reparsedData.outputSize,
         inputSizes: reparsedData.inputSizes,
         outputSizes: reparsedData.outputSizes,
+        
         portPositions: newPortPositions,
         ltr: reparsedData.ltr,
         startWithAll: reparsedData.startWithAll,
@@ -485,6 +501,7 @@ const PipelineEditor = () => {
         description: reparsedData.description
       };
       
+      // Check if any connections need to be removed due to port changes
       const removedConnections = connections.filter(conn => {
         if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) {
           return true;
@@ -510,7 +527,7 @@ const PipelineEditor = () => {
       setIsEditingCode(false);
     } catch (error) {
       addLog('error', `Failed to parse updated code: ${error.message}`);
-      alert(`Error updating block:\n${error.message}\n\nPlease check your @BlockConfig section.`);
+      alert(`Error updating block:\n${error.message}\n\nPlease check your block_config section.`);
     }
   };
 

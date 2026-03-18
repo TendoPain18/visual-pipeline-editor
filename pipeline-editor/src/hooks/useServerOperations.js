@@ -121,16 +121,23 @@ export const useServerOperations = ({
       
       let serverCmd = `pipe_server.exe ${connections.length} ${serverPort}`;
       
+      // BATCH PROCESSING: Use buffer size from output port (includes length header + all packets)
       connections.forEach((conn, i) => {
         const fromBlock = sortedBlocks.find(b => b.id === conn.fromBlock);
         
         let size = 67108864; // default 64MB
-        if (fromBlock) {
-          if (Array.isArray(fromBlock.outputSize)) {
-            size = fromBlock.outputSize[conn.fromPort] || fromBlock.outputSize[0] || size;
-          } else {
-            size = fromBlock.outputSize || size;
-          }
+        if (fromBlock && fromBlock.outputBufferSizes && fromBlock.outputBufferSizes[conn.fromPort]) {
+          // Use the TOTAL buffer size (length header + packet_size × batch_size)
+          size = fromBlock.outputBufferSizes[conn.fromPort];
+          
+          const packetSize = fromBlock.outputPacketSizes[conn.fromPort];
+          const batchSize = fromBlock.outputBatchSizes[conn.fromPort];
+          const lengthBytes = fromBlock.outputLengthBytes[conn.fromPort];
+          
+          addLog('info', 
+            `Pipe ${i}: ${fromBlock.name} port ${conn.fromPort} - ` +
+            `${packetSize}×${batchSize} (${lengthBytes}B header + ${(size - lengthBytes) / 1024}KB data = ${(size / 1024).toFixed(2)}KB total)`
+          );
         }
         
         serverCmd += ` ${pipes[i]} ${size}`;

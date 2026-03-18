@@ -1,21 +1,46 @@
 function crc_decode(pipeIn, pipeOut)
-% CRC_DECODE - ITU-T CRC-32 decoder (INSTANCE-AWARE)
+% CRC_DECODE - ITU-T CRC-32 decoder with BATCH PROCESSING
 
 block_config = struct( ...
-    'name',        'CrcDecode', ...
-    'inputs',      1, ...
-    'outputs',     1, ...
-    'inputSize',   1504, ...
-    'outputSize',  1501, ...
-    'LTR',         false, ...
-    'startWithAll', true, ...
-    'socketHost',  'localhost', ...
-    'socketPort',  9001, ...
-    'polynomial',  79764919, ...
-    'description', 'CRC-32 decoder with error detection - continuous operation' ...
+    'name',              'CrcDecode', ...
+    'inputs',            1, ...
+    'outputs',           1, ...
+    'inputPacketSizes',  1504, ...
+    'inputBatchSizes',   44740, ...
+    'outputPacketSizes', 1501, ...
+    'outputBatchSizes',  44740, ...
+    'LTR',               false, ...
+    'startWithAll',      true, ...
+    'socketHost',        'localhost', ...
+    'socketPort',        9001, ...
+    'polynomial',        79764919, ...
+    'description',       'CRC-32 decoder with error detection - batch processing' ...
 );
 
     config = parse_block_config(block_config);
+
+    % BATCH PROCESSING PARAMETERS
+    INPUT_PACKET_SIZE = config.inputPacketSizes(1);
+    INPUT_BATCH_SIZE = config.inputBatchSizes(1);
+    INPUT_LENGTH_BYTES = calculate_length_bytes(INPUT_BATCH_SIZE);
+    INPUT_BUFFER_SIZE = INPUT_LENGTH_BYTES + (INPUT_PACKET_SIZE * INPUT_BATCH_SIZE);
+    
+    OUTPUT_PACKET_SIZE = config.outputPacketSizes(1);
+    OUTPUT_BATCH_SIZE = config.outputBatchSizes(1);
+    OUTPUT_LENGTH_BYTES = calculate_length_bytes(OUTPUT_BATCH_SIZE);
+    OUTPUT_BUFFER_SIZE = OUTPUT_LENGTH_BYTES + (OUTPUT_PACKET_SIZE * OUTPUT_BATCH_SIZE);
+    
+    DATA_SIZE = INPUT_PACKET_SIZE - 4;  % Remove CRC bytes
+
+    fprintf('\n========================================\n');
+    fprintf('CRC DECODER - Batch Processing Mode\n');
+    fprintf('========================================\n');
+    fprintf('INPUT:  %d bytes × %d packets (header: %dB, total: %.2fKB)\n', ...
+            INPUT_PACKET_SIZE, INPUT_BATCH_SIZE, INPUT_LENGTH_BYTES, INPUT_BUFFER_SIZE/1024);
+    fprintf('OUTPUT: %d bytes × %d packets (header: %dB, total: %.2fKB)\n', ...
+            OUTPUT_PACKET_SIZE, OUTPUT_BATCH_SIZE, OUTPUT_LENGTH_BYTES, OUTPUT_BUFFER_SIZE/1024);
+    fprintf('Data per packet: %d bytes + 1 error flag\n', DATA_SIZE);
+    fprintf('========================================\n');
 
     % Get instance-specific MATLAB port from environment
     matlabPortStr = getenv('MATLAB_PORT');
@@ -39,40 +64,68 @@ block_config = struct( ...
 
         send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
 
-        frameCount = 0;
+        batchCount = 0;
         errorCount = 0;
+        packetCount = 0;
         totalBytes = 0;
         startTime  = tic;
         lastTime   = 0;
         lastBytes  = 0;
 
         while true
-            inputData = pipeline_mex('read', pipeIn, config.inputSize);
-
-            dataInt8 = inputData(1:1500);
-            crcInt8  = inputData(1501:1504);
-
-            dataAsUint8    = typecast(dataInt8, 'uint8');
-            calculatedCrc  = calculate_crc32(dataAsUint8, crcTable);
-
-            crcBytes    = typecast(crcInt8, 'uint8');
-            receivedCrc = typecast(crcBytes, 'uint32');
-
-            if receivedCrc == calculatedCrc
-                errorFlag = int8(0);
-            else
-                errorFlag    = int8(1);
-                errorCount   = errorCount + 1;
+            % Read input batch
+            inputBuffer = pipeline_mex('read', pipeIn, INPUT_BUFFER_SIZE);
+            
+            % Parse length header
+            actualCount = 0;
+            for i = 1:INPUT_LENGTH_BYTES
+                actualCount = actualCount + double(uint8(int32(inputBuffer(i)) + 128)) * (256^(i-1));
             end
+            
+            % Extract input batch data
+            inputBatch = inputBuffer(INPUT_LENGTH_BYTES + 1 : end);
+            
+            % Process batch: check CRC and remove it
+            outputBatch = zeros(OUTPUT_BATCH_SIZE * OUTPUT_PACKET_SIZE, 1, 'int8');
+            
+            for pktIdx = 1:actualCount
+                % Extract input packet (data + CRC)
+                inputOffset = (pktIdx - 1) * INPUT_PACKET_SIZE;
+                inputPacket = inputBatch(inputOffset + 1 : inputOffset + INPUT_PACKET_SIZE);
+                
+                % Split data and CRC
+                dataInt8 = inputPacket(1:DATA_SIZE);
+                crcInt8  = inputPacket(DATA_SIZE + 1 : INPUT_PACKET_SIZE);
+                
+                % Calculate CRC on data
+                dataAsUint8    = typecast(dataInt8, 'uint8');
+                calculatedCrc  = calculate_crc32(dataAsUint8, crcTable);
+                
+                % Extract received CRC
+                crcBytes    = typecast(crcInt8, 'uint8');
+                receivedCrc = typecast(crcBytes, 'uint32');
+                
+                % Compare CRCs
+                if receivedCrc == calculatedCrc
+                    errorFlag = int8(0);
+                else
+                    errorFlag = int8(1);
+                    errorCount = errorCount + 1;
+                end
+                
+                % Create output packet (data + error flag)
+                outputOffset = (pktIdx - 1) * OUTPUT_PACKET_SIZE;
+                outputBatch(outputOffset + 1 : outputOffset + DATA_SIZE) = dataInt8;
+                outputBatch(outputOffset + OUTPUT_PACKET_SIZE) = errorFlag;
+                
+                packetCount = packetCount + 1;
+            end
+            
+            % Write output batch with length header
+            write_batch(pipeOut, outputBatch, actualCount, OUTPUT_LENGTH_BYTES);
 
-            outputData = zeros(config.outputSize, 1, 'int8');
-            outputData(1:1500) = dataInt8;
-            outputData(1501)   = errorFlag;
-
-            pipeline_mex('write', pipeOut, outputData);
-
-            frameCount = frameCount + 1;
-            totalBytes = totalBytes + length(outputData);
+            batchCount = batchCount + 1;
+            totalBytes = totalBytes + OUTPUT_BUFFER_SIZE;
 
             currentTime = toc(startTime);
             elapsed = currentTime - lastTime;
@@ -85,13 +138,14 @@ block_config = struct( ...
             lastBytes = totalBytes;
 
             metrics        = struct();
-            metrics.frames = frameCount;
+            metrics.frames = batchCount;
             metrics.gbps   = instantGbps;
             send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
 
-            if mod(frameCount, 1000) == 0
-                errorRate = 100.0 * errorCount / frameCount;
-                fprintf('Packets: %d, Errors: %d (%.2f%%)\n', frameCount, errorCount, errorRate);
+            if mod(batchCount, 100) == 0
+                errorRate = 100.0 * errorCount / packetCount;
+                fprintf('Batches: %d, Packets: %d, Errors: %d (%.2f%%)\n', ...
+                        batchCount, packetCount, errorCount, errorRate);
             end
         end
 
@@ -100,6 +154,36 @@ block_config = struct( ...
         clear socketObj;
         rethrow(ME);
     end
+end
+
+function lengthBytes = calculate_length_bytes(maxCount)
+    if maxCount <= 255
+        lengthBytes = 1;
+    elseif maxCount <= 65535
+        lengthBytes = 2;
+    elseif maxCount <= 16777215
+        lengthBytes = 3;
+    else
+        lengthBytes = 4;
+    end
+end
+
+function write_batch(pipeOut, batchData, actualCount, lengthBytes)
+    bufferSize = lengthBytes + length(batchData);
+    buffer = zeros(bufferSize, 1, 'int8');
+    
+    % Write length header (little-endian)
+    % FIXED: Convert to uint32 to avoid double/integer mixing
+    count32 = uint32(actualCount);
+    for i = 1:lengthBytes
+        byteVal = bitand(bitshift(count32, -(i-1)*8), uint32(0xFF));
+        buffer(i) = int8(int32(byteVal) - 128);
+    end
+    
+    % Write batch data
+    buffer(lengthBytes + 1 : end) = batchData;
+    
+    pipeline_mex('write', pipeOut, buffer);
 end
 
 function crcTable = build_crc32_table()
@@ -135,10 +219,25 @@ function config = parse_block_config(block_config)
     else
         config.blockId = str2double(blockIdStr);
     end
-    requiredFields = {'name', 'inputs', 'outputs', 'inputSize', 'outputSize'};
-    for i = 1:length(requiredFields)
-        if ~isfield(config, requiredFields{i})
-            error('Missing required field: %s', requiredFields{i});
-        end
+    
+    if ~isfield(config, 'inputPacketSizes') || ~isfield(config, 'inputBatchSizes')
+        error('inputPacketSizes and inputBatchSizes required');
+    end
+    if ~isfield(config, 'outputPacketSizes') || ~isfield(config, 'outputBatchSizes')
+        error('outputPacketSizes and outputBatchSizes required');
+    end
+    
+    % Convert to arrays
+    if ~iscell(config.inputPacketSizes) && ~ismatrix(config.inputPacketSizes)
+        config.inputPacketSizes = [config.inputPacketSizes];
+    end
+    if ~iscell(config.inputBatchSizes) && ~ismatrix(config.inputBatchSizes)
+        config.inputBatchSizes = [config.inputBatchSizes];
+    end
+    if ~iscell(config.outputPacketSizes) && ~ismatrix(config.outputPacketSizes)
+        config.outputPacketSizes = [config.outputPacketSizes];
+    end
+    if ~iscell(config.outputBatchSizes) && ~ismatrix(config.outputBatchSizes)
+        config.outputBatchSizes = [config.outputBatchSizes];
     end
 end

@@ -93,30 +93,86 @@ export const getConnectionAtPoint = (x, y, connections, blocks, snapToGrid) => {
   return null;
 };
 
+/**
+ * STRICT BATCH MATCHING VALIDATION
+ * 
+ * Both packet size AND batch size must match exactly.
+ * No automatic conversions allowed.
+ * 
+ * Connection format: packetSize × batchSize (matrix dimensions)
+ */
 export const validateConnection = (fromBlock, fromPort, toBlock, toPort, blocks, addLog) => {
   const sourceBlock = blocks.find(b => b.id === fromBlock);
   const targetBlock = blocks.find(b => b.id === toBlock);
   
   if (!sourceBlock || !targetBlock) return false;
   
-  // Get the size for the specific port
-  const getPortSize = (block, portIndex, isOutput) => {
-    const sizes = isOutput ? block.outputSizes : block.inputSizes;
-    if (Array.isArray(sizes) && sizes.length > portIndex) {
-      return sizes[portIndex];
+  // Get batch parameters for the specific ports
+  const getPortBatchParams = (block, portIndex, isOutput) => {
+    if (isOutput) {
+      const packetSizes = block.outputPacketSizes || [];
+      const batchSizes = block.outputBatchSizes || [];
+      return {
+        packetSize: packetSizes[portIndex] || 0,
+        batchSize: batchSizes[portIndex] || 1,
+        lengthBytes: block.outputLengthBytes ? block.outputLengthBytes[portIndex] : 0,
+        bufferSize: block.outputBufferSizes ? block.outputBufferSizes[portIndex] : 0
+      };
+    } else {
+      const packetSizes = block.inputPacketSizes || [];
+      const batchSizes = block.inputBatchSizes || [];
+      return {
+        packetSize: packetSizes[portIndex] || 0,
+        batchSize: batchSizes[portIndex] || 1,
+        lengthBytes: block.inputLengthBytes ? block.inputLengthBytes[portIndex] : 0,
+        bufferSize: block.inputBufferSizes ? block.inputBufferSizes[portIndex] : 0
+      };
     }
-    // Fallback to single size
-    return isOutput ? block.outputSize : block.inputSize;
   };
   
-  const sourceSize = getPortSize(sourceBlock, fromPort, true);
-  const targetSize = getPortSize(targetBlock, toPort, false);
+  const source = getPortBatchParams(sourceBlock, fromPort, true);
+  const target = getPortBatchParams(targetBlock, toPort, false);
   
-  if (sourceSize !== targetSize) {
-    addLog('error', `Size mismatch: ${sourceBlock.name} output port ${fromPort} (${(sourceSize / 1024 / 1024).toFixed(2)}MB) ` +
-                    `!= ${targetBlock.name} input port ${toPort} (${(targetSize / 1024 / 1024).toFixed(2)}MB)`);
+  // STRICT VALIDATION: Both dimensions must match
+  
+  // Check 1: Packet size must match exactly
+  if (source.packetSize !== target.packetSize) {
+    addLog('error', 
+      `❌ Packet size mismatch:\n` +
+      `${sourceBlock.name} output port ${fromPort}: ${source.packetSize} bytes/packet\n` +
+      `${targetBlock.name} input port ${toPort}: ${target.packetSize} bytes/packet\n` +
+      `Matrix dimensions must match exactly.`
+    );
     return false;
   }
+  
+  // Check 2: Batch size must match exactly
+  if (source.batchSize !== target.batchSize) {
+    addLog('error', 
+      `❌ Batch size mismatch:\n` +
+      `${sourceBlock.name} output port ${fromPort}: ${source.batchSize} packets/batch\n` +
+      `${targetBlock.name} input port ${toPort}: ${target.batchSize} packets/batch\n` +
+      `Matrix dimensions must match exactly.`
+    );
+    return false;
+  }
+  
+  // Check 3: Buffer size should match (including length header)
+  if (source.bufferSize !== target.bufferSize) {
+    addLog('error', 
+      `❌ Buffer size mismatch:\n` +
+      `${sourceBlock.name} output port ${fromPort}: ${source.bufferSize} bytes total\n` +
+      `${targetBlock.name} input port ${toPort}: ${target.bufferSize} bytes total\n` +
+      `This shouldn't happen if packet and batch sizes match - check configuration.`
+    );
+    return false;
+  }
+  
+  // All checks passed
+  addLog('success', 
+    `✅ Connection valid: ${source.packetSize}×${source.batchSize} ` +
+    `(${(source.bufferSize / 1024).toFixed(2)} KB total)`
+  );
   
   return true;
 };

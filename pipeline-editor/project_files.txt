@@ -179,23 +179,48 @@ export default defineConfig({
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\crc_decode.m ---
 function crc_decode(pipeIn, pipeOut)
-% CRC_DECODE - ITU-T CRC-32 decoder (INSTANCE-AWARE)
+% CRC_DECODE - ITU-T CRC-32 decoder with BATCH PROCESSING
 
 block_config = struct( ...
-    'name',        'CrcDecode', ...
-    'inputs',      1, ...
-    'outputs',     1, ...
-    'inputSize',   1504, ...
-    'outputSize',  1501, ...
-    'LTR',         false, ...
-    'startWithAll', true, ...
-    'socketHost',  'localhost', ...
-    'socketPort',  9001, ...
-    'polynomial',  79764919, ...
-    'description', 'CRC-32 decoder with error detection - continuous operation' ...
+    'name',              'CrcDecode', ...
+    'inputs',            1, ...
+    'outputs',           1, ...
+    'inputPacketSizes',  1504, ...
+    'inputBatchSizes',   44740, ...
+    'outputPacketSizes', 1501, ...
+    'outputBatchSizes',  44740, ...
+    'LTR',               false, ...
+    'startWithAll',      true, ...
+    'socketHost',        'localhost', ...
+    'socketPort',        9001, ...
+    'polynomial',        79764919, ...
+    'description',       'CRC-32 decoder with error detection - batch processing' ...
 );
 
     config = parse_block_config(block_config);
+
+    % BATCH PROCESSING PARAMETERS
+    INPUT_PACKET_SIZE = config.inputPacketSizes(1);
+    INPUT_BATCH_SIZE = config.inputBatchSizes(1);
+    INPUT_LENGTH_BYTES = calculate_length_bytes(INPUT_BATCH_SIZE);
+    INPUT_BUFFER_SIZE = INPUT_LENGTH_BYTES + (INPUT_PACKET_SIZE * INPUT_BATCH_SIZE);
+    
+    OUTPUT_PACKET_SIZE = config.outputPacketSizes(1);
+    OUTPUT_BATCH_SIZE = config.outputBatchSizes(1);
+    OUTPUT_LENGTH_BYTES = calculate_length_bytes(OUTPUT_BATCH_SIZE);
+    OUTPUT_BUFFER_SIZE = OUTPUT_LENGTH_BYTES + (OUTPUT_PACKET_SIZE * OUTPUT_BATCH_SIZE);
+    
+    DATA_SIZE = INPUT_PACKET_SIZE - 4;  % Remove CRC bytes
+
+    fprintf('\n========================================\n');
+    fprintf('CRC DECODER - Batch Processing Mode\n');
+    fprintf('========================================\n');
+    fprintf('INPUT:  %d bytes × %d packets (header: %dB, total: %.2fKB)\n', ...
+            INPUT_PACKET_SIZE, INPUT_BATCH_SIZE, INPUT_LENGTH_BYTES, INPUT_BUFFER_SIZE/1024);
+    fprintf('OUTPUT: %d bytes × %d packets (header: %dB, total: %.2fKB)\n', ...
+            OUTPUT_PACKET_SIZE, OUTPUT_BATCH_SIZE, OUTPUT_LENGTH_BYTES, OUTPUT_BUFFER_SIZE/1024);
+    fprintf('Data per packet: %d bytes + 1 error flag\n', DATA_SIZE);
+    fprintf('========================================\n');
 
     % Get instance-specific MATLAB port from environment
     matlabPortStr = getenv('MATLAB_PORT');
@@ -219,40 +244,68 @@ block_config = struct( ...
 
         send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
 
-        frameCount = 0;
+        batchCount = 0;
         errorCount = 0;
+        packetCount = 0;
         totalBytes = 0;
         startTime  = tic;
         lastTime   = 0;
         lastBytes  = 0;
 
         while true
-            inputData = pipeline_mex('read', pipeIn, config.inputSize);
-
-            dataInt8 = inputData(1:1500);
-            crcInt8  = inputData(1501:1504);
-
-            dataAsUint8    = typecast(dataInt8, 'uint8');
-            calculatedCrc  = calculate_crc32(dataAsUint8, crcTable);
-
-            crcBytes    = typecast(crcInt8, 'uint8');
-            receivedCrc = typecast(crcBytes, 'uint32');
-
-            if receivedCrc == calculatedCrc
-                errorFlag = int8(0);
-            else
-                errorFlag    = int8(1);
-                errorCount   = errorCount + 1;
+            % Read input batch
+            inputBuffer = pipeline_mex('read', pipeIn, INPUT_BUFFER_SIZE);
+            
+            % Parse length header
+            actualCount = 0;
+            for i = 1:INPUT_LENGTH_BYTES
+                actualCount = actualCount + double(uint8(int32(inputBuffer(i)) + 128)) * (256^(i-1));
             end
+            
+            % Extract input batch data
+            inputBatch = inputBuffer(INPUT_LENGTH_BYTES + 1 : end);
+            
+            % Process batch: check CRC and remove it
+            outputBatch = zeros(OUTPUT_BATCH_SIZE * OUTPUT_PACKET_SIZE, 1, 'int8');
+            
+            for pktIdx = 1:actualCount
+                % Extract input packet (data + CRC)
+                inputOffset = (pktIdx - 1) * INPUT_PACKET_SIZE;
+                inputPacket = inputBatch(inputOffset + 1 : inputOffset + INPUT_PACKET_SIZE);
+                
+                % Split data and CRC
+                dataInt8 = inputPacket(1:DATA_SIZE);
+                crcInt8  = inputPacket(DATA_SIZE + 1 : INPUT_PACKET_SIZE);
+                
+                % Calculate CRC on data
+                dataAsUint8    = typecast(dataInt8, 'uint8');
+                calculatedCrc  = calculate_crc32(dataAsUint8, crcTable);
+                
+                % Extract received CRC
+                crcBytes    = typecast(crcInt8, 'uint8');
+                receivedCrc = typecast(crcBytes, 'uint32');
+                
+                % Compare CRCs
+                if receivedCrc == calculatedCrc
+                    errorFlag = int8(0);
+                else
+                    errorFlag = int8(1);
+                    errorCount = errorCount + 1;
+                end
+                
+                % Create output packet (data + error flag)
+                outputOffset = (pktIdx - 1) * OUTPUT_PACKET_SIZE;
+                outputBatch(outputOffset + 1 : outputOffset + DATA_SIZE) = dataInt8;
+                outputBatch(outputOffset + OUTPUT_PACKET_SIZE) = errorFlag;
+                
+                packetCount = packetCount + 1;
+            end
+            
+            % Write output batch with length header
+            write_batch(pipeOut, outputBatch, actualCount, OUTPUT_LENGTH_BYTES);
 
-            outputData = zeros(config.outputSize, 1, 'int8');
-            outputData(1:1500) = dataInt8;
-            outputData(1501)   = errorFlag;
-
-            pipeline_mex('write', pipeOut, outputData);
-
-            frameCount = frameCount + 1;
-            totalBytes = totalBytes + length(outputData);
+            batchCount = batchCount + 1;
+            totalBytes = totalBytes + OUTPUT_BUFFER_SIZE;
 
             currentTime = toc(startTime);
             elapsed = currentTime - lastTime;
@@ -265,13 +318,14 @@ block_config = struct( ...
             lastBytes = totalBytes;
 
             metrics        = struct();
-            metrics.frames = frameCount;
+            metrics.frames = batchCount;
             metrics.gbps   = instantGbps;
             send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
 
-            if mod(frameCount, 1000) == 0
-                errorRate = 100.0 * errorCount / frameCount;
-                fprintf('Packets: %d, Errors: %d (%.2f%%)\n', frameCount, errorCount, errorRate);
+            if mod(batchCount, 100) == 0
+                errorRate = 100.0 * errorCount / packetCount;
+                fprintf('Batches: %d, Packets: %d, Errors: %d (%.2f%%)\n', ...
+                        batchCount, packetCount, errorCount, errorRate);
             end
         end
 
@@ -280,6 +334,36 @@ block_config = struct( ...
         clear socketObj;
         rethrow(ME);
     end
+end
+
+function lengthBytes = calculate_length_bytes(maxCount)
+    if maxCount <= 255
+        lengthBytes = 1;
+    elseif maxCount <= 65535
+        lengthBytes = 2;
+    elseif maxCount <= 16777215
+        lengthBytes = 3;
+    else
+        lengthBytes = 4;
+    end
+end
+
+function write_batch(pipeOut, batchData, actualCount, lengthBytes)
+    bufferSize = lengthBytes + length(batchData);
+    buffer = zeros(bufferSize, 1, 'int8');
+    
+    % Write length header (little-endian)
+    % FIXED: Convert to uint32 to avoid double/integer mixing
+    count32 = uint32(actualCount);
+    for i = 1:lengthBytes
+        byteVal = bitand(bitshift(count32, -(i-1)*8), uint32(0xFF));
+        buffer(i) = int8(int32(byteVal) - 128);
+    end
+    
+    % Write batch data
+    buffer(lengthBytes + 1 : end) = batchData;
+    
+    pipeline_mex('write', pipeOut, buffer);
 end
 
 function crcTable = build_crc32_table()
@@ -315,33 +399,70 @@ function config = parse_block_config(block_config)
     else
         config.blockId = str2double(blockIdStr);
     end
-    requiredFields = {'name', 'inputs', 'outputs', 'inputSize', 'outputSize'};
-    for i = 1:length(requiredFields)
-        if ~isfield(config, requiredFields{i})
-            error('Missing required field: %s', requiredFields{i});
-        end
+    
+    if ~isfield(config, 'inputPacketSizes') || ~isfield(config, 'inputBatchSizes')
+        error('inputPacketSizes and inputBatchSizes required');
+    end
+    if ~isfield(config, 'outputPacketSizes') || ~isfield(config, 'outputBatchSizes')
+        error('outputPacketSizes and outputBatchSizes required');
+    end
+    
+    % Convert to arrays
+    if ~iscell(config.inputPacketSizes) && ~ismatrix(config.inputPacketSizes)
+        config.inputPacketSizes = [config.inputPacketSizes];
+    end
+    if ~iscell(config.inputBatchSizes) && ~ismatrix(config.inputBatchSizes)
+        config.inputBatchSizes = [config.inputBatchSizes];
+    end
+    if ~iscell(config.outputPacketSizes) && ~ismatrix(config.outputPacketSizes)
+        config.outputPacketSizes = [config.outputPacketSizes];
+    end
+    if ~iscell(config.outputBatchSizes) && ~ismatrix(config.outputBatchSizes)
+        config.outputBatchSizes = [config.outputBatchSizes];
     end
 end
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\crc_encode.m ---
 function crc_encode(pipeIn, pipeOut)
-% CRC_ENCODE - ITU-T CRC-32 encoder (INSTANCE-AWARE)
+% CRC_ENCODE - ITU-T CRC-32 encoder with BATCH PROCESSING
 
 block_config = struct( ...
-    'name',        'CrcEncode', ...
-    'inputs',      1, ...
-    'outputs',     1, ...
-    'inputSize',   1500, ...
-    'outputSize',  1504, ...
-    'LTR',         true, ...
-    'startWithAll', true, ...
-    'socketHost',  'localhost', ...
-    'socketPort',  9001, ...
-    'polynomial',  79764919, ...
-    'description', 'CRC-32 encoder (ITU-T V.42) - continuous operation' ...
+    'name',              'CrcEncode', ...
+    'inputs',            1, ...
+    'outputs',           1, ...
+    'inputPacketSizes',  1500, ...
+    'inputBatchSizes',   44740, ...
+    'outputPacketSizes', 1504, ...
+    'outputBatchSizes',  44740, ...
+    'LTR',               true, ...
+    'startWithAll',      true, ...
+    'socketHost',        'localhost', ...
+    'socketPort',        9001, ...
+    'polynomial',        79764919, ...
+    'description',       'CRC-32 encoder (ITU-T V.42) - batch processing' ...
 );
 
     config = parse_block_config(block_config);
+
+    % BATCH PROCESSING PARAMETERS
+    INPUT_PACKET_SIZE = config.inputPacketSizes(1);
+    INPUT_BATCH_SIZE = config.inputBatchSizes(1);
+    INPUT_LENGTH_BYTES = calculate_length_bytes(INPUT_BATCH_SIZE);
+    INPUT_BUFFER_SIZE = INPUT_LENGTH_BYTES + (INPUT_PACKET_SIZE * INPUT_BATCH_SIZE);
+    
+    OUTPUT_PACKET_SIZE = config.outputPacketSizes(1);
+    OUTPUT_BATCH_SIZE = config.outputBatchSizes(1);
+    OUTPUT_LENGTH_BYTES = calculate_length_bytes(OUTPUT_BATCH_SIZE);
+    OUTPUT_BUFFER_SIZE = OUTPUT_LENGTH_BYTES + (OUTPUT_PACKET_SIZE * OUTPUT_BATCH_SIZE);
+
+    fprintf('\n========================================\n');
+    fprintf('CRC ENCODER - Batch Processing Mode\n');
+    fprintf('========================================\n');
+    fprintf('INPUT:  %d bytes × %d packets (header: %dB, total: %.2fKB)\n', ...
+            INPUT_PACKET_SIZE, INPUT_BATCH_SIZE, INPUT_LENGTH_BYTES, INPUT_BUFFER_SIZE/1024);
+    fprintf('OUTPUT: %d bytes × %d packets (header: %dB, total: %.2fKB)\n', ...
+            OUTPUT_PACKET_SIZE, OUTPUT_BATCH_SIZE, OUTPUT_LENGTH_BYTES, OUTPUT_BUFFER_SIZE/1024);
+    fprintf('========================================\n');
 
     % Get instance-specific MATLAB port from environment
     matlabPortStr = getenv('MATLAB_PORT');
@@ -366,7 +487,7 @@ block_config = struct( ...
 
         send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
 
-        frameCount = 0;
+        batchCount = 0;
         totalBytes = 0;
         startTime  = tic;
         lastTime   = 0;
@@ -374,25 +495,45 @@ block_config = struct( ...
 
         % CONTINUOUS OPERATION - Never exits
         while true
-            % Read input (1500 bytes as int8)
-            inputData = pipeline_mex('read', pipeIn, config.inputSize);
+            % Read input batch
+            inputBuffer = pipeline_mex('read', pipeIn, INPUT_BUFFER_SIZE);
+            
+            % Parse length header
+            actualCount = 0;
+            for i = 1:INPUT_LENGTH_BYTES
+                actualCount = actualCount + double(uint8(int32(inputBuffer(i)) + 128)) * (256^(i-1));
+            end
+            
+            % Extract input batch data
+            inputBatch = inputBuffer(INPUT_LENGTH_BYTES + 1 : end);
+            
+            % Process batch: add CRC to each packet
+            outputBatch = zeros(OUTPUT_BATCH_SIZE * OUTPUT_PACKET_SIZE, 1, 'int8');
+            
+            for pktIdx = 1:actualCount
+                % Extract input packet
+                inputOffset = (pktIdx - 1) * INPUT_PACKET_SIZE;
+                inputPacket = inputBatch(inputOffset + 1 : inputOffset + INPUT_PACKET_SIZE);
+                
+                % Calculate CRC on the int8 data by treating as uint8
+                dataAsUint8 = typecast(inputPacket, 'uint8');
+                crc32 = calculate_crc32(dataAsUint8, crcTable);
+                
+                % Create output packet (data + CRC)
+                outputOffset = (pktIdx - 1) * OUTPUT_PACKET_SIZE;
+                outputBatch(outputOffset + 1 : outputOffset + INPUT_PACKET_SIZE) = inputPacket;
+                
+                % Append CRC as 4 bytes (little-endian)
+                crcBytes = typecast(uint32(crc32), 'uint8');
+                crcInt8 = typecast(crcBytes, 'int8');
+                outputBatch(outputOffset + INPUT_PACKET_SIZE + 1 : outputOffset + OUTPUT_PACKET_SIZE) = crcInt8;
+            end
+            
+            % Write output batch with length header
+            write_batch(pipeOut, outputBatch, actualCount, OUTPUT_LENGTH_BYTES);
 
-            % Calculate CRC on the int8 data by treating as uint8
-            dataAsUint8 = typecast(inputData, 'uint8');
-            crc32 = calculate_crc32(dataAsUint8, crcTable);
-
-            % Create output (1504 bytes = 1500 data + 4 CRC)
-            outputData = zeros(config.outputSize, 1, 'int8');
-            outputData(1:config.inputSize) = inputData;
-
-            % Append CRC as 4 bytes (little-endian)
-            crcBytes = typecast(uint32(crc32), 'uint8');
-            outputData(1501:1504) = typecast(crcBytes, 'int8');
-
-            pipeline_mex('write', pipeOut, outputData);
-
-            frameCount = frameCount + 1;
-            totalBytes = totalBytes + length(outputData);
+            batchCount = batchCount + 1;
+            totalBytes = totalBytes + OUTPUT_BUFFER_SIZE;
 
             currentTime = toc(startTime);
             elapsed = currentTime - lastTime;
@@ -405,7 +546,7 @@ block_config = struct( ...
             lastBytes = totalBytes;
 
             metrics        = struct();
-            metrics.frames = frameCount;
+            metrics.frames = batchCount;
             metrics.gbps   = instantGbps;
             send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
         end
@@ -415,6 +556,36 @@ block_config = struct( ...
         clear socketObj;
         rethrow(ME);
     end
+end
+
+function lengthBytes = calculate_length_bytes(maxCount)
+    if maxCount <= 255
+        lengthBytes = 1;
+    elseif maxCount <= 65535
+        lengthBytes = 2;
+    elseif maxCount <= 16777215
+        lengthBytes = 3;
+    else
+        lengthBytes = 4;
+    end
+end
+
+function write_batch(pipeOut, batchData, actualCount, lengthBytes)
+    bufferSize = lengthBytes + length(batchData);
+    buffer = zeros(bufferSize, 1, 'int8');
+    
+    % Write length header (little-endian)
+    % FIXED: Convert to uint32 to avoid double/integer mixing
+    count32 = uint32(actualCount);
+    for i = 1:lengthBytes
+        byteVal = bitand(bitshift(count32, -(i-1)*8), uint32(0xFF));
+        buffer(i) = int8(int32(byteVal) - 128);
+    end
+    
+    % Write batch data
+    buffer(lengthBytes + 1 : end) = batchData;
+    
+    pipeline_mex('write', pipeOut, buffer);
 end
 
 function crcTable = build_crc32_table()
@@ -450,34 +621,71 @@ function config = parse_block_config(block_config)
     else
         config.blockId = str2double(blockIdStr);
     end
-    requiredFields = {'name', 'inputs', 'outputs', 'inputSize', 'outputSize'};
-    for i = 1:length(requiredFields)
-        if ~isfield(config, requiredFields{i})
-            error('Missing required field: %s', requiredFields{i});
-        end
+    
+    if ~isfield(config, 'inputPacketSizes') || ~isfield(config, 'inputBatchSizes')
+        error('inputPacketSizes and inputBatchSizes required');
+    end
+    if ~isfield(config, 'outputPacketSizes') || ~isfield(config, 'outputBatchSizes')
+        error('outputPacketSizes and outputBatchSizes required');
+    end
+    
+    % Convert to arrays
+    if ~iscell(config.inputPacketSizes) && ~ismatrix(config.inputPacketSizes)
+        config.inputPacketSizes = [config.inputPacketSizes];
+    end
+    if ~iscell(config.inputBatchSizes) && ~ismatrix(config.inputBatchSizes)
+        config.inputBatchSizes = [config.inputBatchSizes];
+    end
+    if ~iscell(config.outputPacketSizes) && ~ismatrix(config.outputPacketSizes)
+        config.outputPacketSizes = [config.outputPacketSizes];
+    end
+    if ~iscell(config.outputBatchSizes) && ~ismatrix(config.outputBatchSizes)
+        config.outputBatchSizes = [config.outputBatchSizes];
     end
 end
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\file_sink.m ---
 function file_sink(pipeIn)
-% FILE_SINK - Continuous file reception (INSTANCE-AWARE)
+% FILE_SINK - On-the-fly disk writing with streaming file reconstruction
 
 block_config = struct( ...
-    'name',            'FileSink', ...
-    'inputs',          1, ...
-    'outputs',         0, ...
-    'inputSize',       1501, ...
-    'outputSize',      0, ...
-    'LTR',             false, ...
-    'startWithAll',    true, ...
-    'socketHost',      'localhost', ...
-    'socketPort',      9001, ...
-    'outputDirectory', 'C:\Users\amrga\Downloads\final\pipeline-editor\Output_Files', ...
-    'reportFile',      'error_report.txt', ...
-    'description',     'File sink - receives multiple batches, reports after each batch' ...
+    'name',             'FileSink', ...
+    'inputs',           1, ...
+    'outputs',          0, ...
+    'inputPacketSizes', 1501, ...
+    'inputBatchSizes',  44740, ...
+    'LTR',              false, ...
+    'startWithAll',     true, ...
+    'socketHost',       'localhost', ...
+    'socketPort',       9001, ...
+    'outputDirectory',  'C:\Users\amrga\Downloads\final\pipeline-editor\Output_Files', ...
+    'description',      'Streaming file sink with on-the-fly disk writes' ...
 );
 
     config = parse_block_config(block_config);
+    
+    % BATCH PROCESSING PARAMETERS
+    PACKET_SIZE = config.inputPacketSizes(1);
+    BATCH_SIZE = config.inputBatchSizes(1);
+    LENGTH_BYTES = calculate_length_bytes(BATCH_SIZE);
+    BUFFER_SIZE = LENGTH_BYTES + (PACKET_SIZE * BATCH_SIZE);
+    
+    % Packet structure: 1500 bytes data + 1 byte error flag
+    DATA_SIZE = PACKET_SIZE - 1;
+    
+    % FILE PROTOCOL CONSTANTS
+    START_FLAG = uint8([0xAA, 0x55, 0xAA, 0x55]);
+    END_FLAG = uint8([0x55, 0xAA, 0x55, 0xAA]);
+    FILENAME_LENGTH = 256;
+    REPETITIONS = 10;
+    
+    fprintf('\n========================================\n');
+    fprintf('FILE SINK - Streaming On-The-Fly Writes\n');
+    fprintf('========================================\n');
+    fprintf('Packet Size:  %d bytes (%d data + 1 error flag)\n', PACKET_SIZE, DATA_SIZE);
+    fprintf('Batch Size:   %d packets\n', BATCH_SIZE);
+    fprintf('Mode:         Write to disk immediately, detect boundaries\n');
+    fprintf('========================================\n');
 
     % Get instance-specific MATLAB port from environment
     matlabPortStr = getenv('MATLAB_PORT');
@@ -487,7 +695,6 @@ block_config = struct( ...
         matlabPort = config.socketPort;
     end
 
-    % SOCKET CONNECTION (REQUIRED)
     socketObj = matlab_socket_client(config.socketHost, matlabPort, 10);
 
     if isempty(socketObj)
@@ -503,165 +710,291 @@ block_config = struct( ...
 
         send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
 
+        batchCount = 0;
         packetCount = 0;
-        totalBytes  = 0;
-        startTime   = tic;
-        lastTime    = 0;
-        lastBytes   = 0;
-
-        currentFile  = struct();
+        totalErrorCount = 0;
+        totalBytes = 0;
+        startTime  = tic;
+        lastTime   = 0;
+        lastBytes  = 0;
+        
+        % Streaming file reconstruction state
+        streamBuffer = [];           % Small buffer for file boundary detection
+        currentFile = struct();      % Current file being written
         currentFile.active = false;
-        fileStats    = {};
-        totalErrors  = 0;
+        currentFile.fid = -1;
+        currentFile.name = '';
+        currentFile.expectedSize = 0;
+        currentFile.writtenBytes = 0;
+        currentFile.errorCount = 0;
+        currentFile.tempPath = '';
+        
+        filesReceived = 0;
+        
+        % Initialize error report file
+        reportPath = fullfile(config.outputDirectory, 'error_report.txt');
+        initialize_error_report(reportPath);
+        
+        fprintf('Output directory: %s\n', config.outputDirectory);
+        fprintf('Error report:     %s\n', reportPath);
+        fprintf('Streaming mode active - writing to disk on-the-fly...\n\n');
 
         while true
             try
-                packet = pipeline_mex('read', pipeIn, config.inputSize);
+                % Read batch from pipe
+                buffer = pipeline_mex('read', pipeIn, BUFFER_SIZE);
+                
             catch ME
                 fprintf('\n========================================\n');
                 fprintf('PIPELINE CLOSED\n');
                 fprintf('========================================\n');
-
-                if currentFile.active && ~isempty(currentFile.data)
-                    fprintf('Saving incomplete file: %s\n', currentFile.name);
-                    save_file(currentFile, config.outputDirectory);
-                    fileStats{end+1} = struct('name', currentFile.name, ...
-                                              'size', length(currentFile.data), ...
-                                              'expected', currentFile.size, ...
-                                              'errors', currentFile.errors, ...
-                                              'packets', currentFile.packets, ...
-                                              'complete', false);
-                    totalErrors = totalErrors + currentFile.errors;
+                
+                % Close any open file
+                if currentFile.active && currentFile.fid ~= -1
+                    fclose(currentFile.fid);
+                    finalize_file(currentFile, reportPath);
+                    filesReceived = filesReceived + 1;
                 end
 
-                fprintf('Generating final error report...\n');
-                generate_error_report(fileStats, config.outputDirectory, config.reportFile);
-
+                % Print final summary
                 fprintf('\n========================================\n');
-                fprintf('RECEPTION SUMMARY\n');
+                fprintf('FINAL SUMMARY\n');
                 fprintf('========================================\n');
-                fprintf('Total files received: %d\n', length(fileStats));
-                fprintf('Total packets:        %d\n', packetCount);
-                fprintf('Total errors:         %d\n', totalErrors);
-                fprintf('Total data:           %.2f MB\n', totalBytes/1e6);
+                fprintf('Files received: %d\n', filesReceived);
+                fprintf('Total batches:  %d\n', batchCount);
+                fprintf('Total packets:  %d\n', packetCount);
+                fprintf('Total errors:   %d\n', totalErrorCount);
+                fprintf('Error rate:     %.4f%%\n', 100.0 * totalErrorCount / max(packetCount, 1));
+                fprintf('Total data:     %.2f MB\n', totalBytes/1e6);
                 fprintf('========================================\n');
+
+                update_final_summary(reportPath, filesReceived, batchCount, packetCount, totalErrorCount, totalBytes);
+                fprintf('\nFinal error report saved to: %s\n', reportPath);
 
                 send_socket_message(socketObj, 'BLOCK_STOPPED', config.blockId, config.name, '');
                 clear socketObj;
                 return;
             end
 
-            data      = packet(1:1500);
-            errorFlag = packet(1501);
-
-            packetCount = packetCount + 1;
-            totalBytes  = totalBytes + 1500;
-
-            dataBytes = uint8(int32(data) + 128);
-
-            isStart  = (dataBytes(1) == 0x53 && dataBytes(2) == 0x54 && ...
-                       dataBytes(3) == 0x41 && dataBytes(4) == 0x52);
-            isHeader = (dataBytes(1) == 0x46 && dataBytes(2) == 0x49 && ...
-                       dataBytes(3) == 0x4C && dataBytes(4) == 0x45);
-            isEnd    = (dataBytes(1) == 0x45 && dataBytes(2) == 0x4E && ...
-                       dataBytes(3) == 0x44 && dataBytes(4) == 0x00);
-
-            if isStart
-                fprintf('\n--- START marker received ---\n');
-                continue;
+            % Parse length header
+            actualCount = 0;
+            for i = 1:LENGTH_BYTES
+                byteVal = uint8(int32(buffer(i)) + 128);
+                actualCount = actualCount + double(byteVal) * (256^(i-1));
             end
-
-            if isEnd
-                fprintf('--- END marker received ---\n');
-
-                if currentFile.active
-                    if length(currentFile.data) >= currentFile.size
-                        currentFile.data = currentFile.data(1:currentFile.size);
-                        save_file(currentFile, config.outputDirectory);
-                        fileStats{end+1} = struct('name', currentFile.name, ...
-                                                  'size', currentFile.size, ...
-                                                  'expected', currentFile.size, ...
-                                                  'errors', currentFile.errors, ...
-                                                  'packets', currentFile.packets, ...
-                                                  'complete', true);
-                        fprintf('  File complete and saved: %s\n', currentFile.name);
-                    else
-                        save_file(currentFile, config.outputDirectory);
-                        fileStats{end+1} = struct('name', currentFile.name, ...
-                                                  'size', length(currentFile.data), ...
-                                                  'expected', currentFile.size, ...
-                                                  'errors', currentFile.errors, ...
-                                                  'packets', currentFile.packets, ...
-                                                  'complete', false);
-                        fprintf('  File incomplete: %s (%d/%d bytes)\n', ...
-                                currentFile.name, length(currentFile.data), currentFile.size);
-                    end
-                    totalErrors = totalErrors + currentFile.errors;
-                    generate_error_report(fileStats, config.outputDirectory, config.reportFile);
-                    currentFile.active = false;
-                end
-
-                currentTime = toc(startTime);
-                elapsed = currentTime - lastTime;
-                if elapsed > 0
-                    instantGbps = ((totalBytes - lastBytes) * 8 / 1e9) / elapsed;
-                else
-                    instantGbps = 0;
-                end
-                lastTime  = currentTime;
-                lastBytes = totalBytes;
-
-                metrics         = struct();
-                metrics.frames  = packetCount;
-                metrics.gbps    = instantGbps;
-                metrics.totalGB = totalBytes / 1e9;
-                send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
-                fprintf('Total files received: %d, Total packets: %d\n\n', length(fileStats), packetCount);
-                continue;
+            
+            if actualCount == 0
+                fprintf('Received EOF signal (0 packets)\n');
+                break;
             end
+            
+            % Extract batch data
+            batchData = buffer(LENGTH_BYTES + 1 : end);
+            
+            batchCount = batchCount + 1;
+            packetCount = packetCount + actualCount;
 
-            if isHeader
-                if currentFile.active
-                    save_file(currentFile, config.outputDirectory);
-                    fileStats{end+1} = struct('name', currentFile.name, ...
-                                              'size', currentFile.size, ...
-                                              'expected', currentFile.size, ...
-                                              'errors', currentFile.errors, ...
-                                              'packets', currentFile.packets, ...
-                                              'complete', true);
-                    totalErrors = totalErrors + currentFile.errors;
-                end
-
-                nameLen  = bitor(uint16(dataBytes(5)), bitshift(uint16(dataBytes(6)), 8));
-                fileName = char(dataBytes(7:6+nameLen)');
-
-                fileSize = uint64(0);
-                for i = 0:7
-                    fileSize = bitor(fileSize, bitshift(uint64(dataBytes(7+nameLen+i)), 8*i));
-                end
-
-                currentFile.active  = true;
-                currentFile.name    = fileName;
-                currentFile.size    = double(fileSize);
-                currentFile.data    = [];
-                currentFile.errors  = 0;
-                currentFile.packets = 0;
-
+            % ===== OPTIMIZED VECTORIZED PACKET PROCESSING =====
+            tic_process = tic;
+            
+            % Pre-allocate output arrays
+            newDataSize = actualCount * DATA_SIZE;
+            newData = zeros(newDataSize, 1, 'uint8');
+            newErrors = zeros(newDataSize, 1, 'int8');
+            
+            % Process all packets
+            for pktIdx = 1:actualCount
+                offset = (pktIdx - 1) * PACKET_SIZE;
+                packet = batchData(offset + 1 : offset + PACKET_SIZE);
+                
+                % Extract data and error flag
+                data = packet(1:DATA_SIZE);
+                errorFlag = packet(PACKET_SIZE);
+                
+                % Convert int8 to uint8
+                dataBytes = uint8(int32(data) + 128);
+                
+                % Track errors
                 if errorFlag ~= 0
-                    currentFile.errors = currentFile.errors + 1;
+                    totalErrorCount = totalErrorCount + 1;
                 end
-                currentFile.packets = currentFile.packets + 1;
-
-            else
-                if currentFile.active
-                    currentFile.data    = [currentFile.data; data];
-                    currentFile.packets = currentFile.packets + 1;
-                    if errorFlag ~= 0
-                        currentFile.errors = currentFile.errors + 1;
+                
+                % Write to pre-allocated arrays
+                outOffset = (pktIdx - 1) * DATA_SIZE;
+                newData(outOffset + 1 : outOffset + DATA_SIZE) = dataBytes;
+                newErrors(outOffset + 1 : outOffset + DATA_SIZE) = repmat(errorFlag, DATA_SIZE, 1);
+            end
+            
+            process_time = toc(tic_process);
+            totalBytes = totalBytes + (actualCount * DATA_SIZE);
+            
+            % ===== STREAMING FILE WRITE WITH BOUNDARY DETECTION =====
+            tic_stream = tic;
+            
+            % Add new data to stream buffer
+            streamBuffer = [streamBuffer; newData];
+            
+            % Process stream buffer for file boundaries
+            while true
+                % Not currently writing a file - look for START flag
+                if ~currentFile.active
+                    startPos = find_pattern(streamBuffer, START_FLAG);
+                    
+                    if isempty(startPos)
+                        % No START found - keep last 4KB in buffer (in case START is split)
+                        if length(streamBuffer) > 4096
+                            streamBuffer = streamBuffer(end-4095:end);
+                        end
+                        break;
+                    end
+                    
+                    % Found START - parse metadata
+                    metadataSize = 4 + (FILENAME_LENGTH * REPETITIONS) + (8 * REPETITIONS);
+                    
+                    if length(streamBuffer) < startPos + metadataSize - 1
+                        % Not enough data for full metadata yet
+                        break;
+                    end
+                    
+                    % Extract filename
+                    nameStart = startPos + 4;
+                    fileNames = cell(REPETITIONS, 1);
+                    for i = 1:REPETITIONS
+                        nameBytes = streamBuffer(nameStart + (i-1)*FILENAME_LENGTH : nameStart + i*FILENAME_LENGTH - 1);
+                        nullPos = find(nameBytes == 0, 1);
+                        if ~isempty(nullPos)
+                            nameBytes = nameBytes(1:nullPos-1);
+                        end
+                        fileNames{i} = char(nameBytes');
+                    end
+                    fileName = majority_vote_string(fileNames);
+                    
+                    % Extract file size
+                    sizeStart = nameStart + (FILENAME_LENGTH * REPETITIONS);
+                    fileSizes = zeros(REPETITIONS, 1);
+                    for i = 1:REPETITIONS
+                        sizeBytes = streamBuffer(sizeStart + (i-1)*8 : sizeStart + i*8 - 1);
+                        fileSizes(i) = typecast(uint8(sizeBytes), 'uint64');
+                    end
+                    fileSize = mode(fileSizes);
+                    
+                    % Open file for streaming write
+                    tempPath = fullfile(config.outputDirectory, [fileName '.part']);
+                    finalPath = fullfile(config.outputDirectory, fileName);
+                    
+                    fid = fopen(tempPath, 'wb');
+                    if fid == -1
+                        error('Cannot create file: %s', tempPath);
+                    end
+                    
+                    fprintf('Started streaming: %s (%.2f MB)\n', fileName, fileSize/1e6);
+                    
+                    % Initialize current file state
+                    currentFile.active = true;
+                    currentFile.fid = fid;
+                    currentFile.name = fileName;
+                    currentFile.tempPath = tempPath;
+                    currentFile.finalPath = finalPath;
+                    currentFile.expectedSize = fileSize;
+                    currentFile.writtenBytes = 0;
+                    currentFile.errorCount = 0;
+                    currentFile.startTime = tic;
+                    
+                    % Remove metadata from buffer
+                    dataStart = startPos + metadataSize;
+                    streamBuffer = streamBuffer(dataStart:end);
+                    
+                else
+                    % Currently writing a file - write data to disk
+                    remainingBytes = currentFile.expectedSize - currentFile.writtenBytes;
+                    
+                    if remainingBytes <= 0
+                        % File complete - look for END flag
+                        if length(streamBuffer) >= 4
+                            endFlag = streamBuffer(1:4);
+                            if isequal(endFlag, END_FLAG')
+                                % Valid END flag found
+                                streamBuffer = streamBuffer(5:end);
+                                
+                                % Close and finalize file
+                                fclose(currentFile.fid);
+                                
+                                % Rename from .part to final name
+                                movefile(currentFile.tempPath, currentFile.finalPath);
+                                
+                                writeTime = toc(currentFile.startTime);
+                                throughput = (currentFile.expectedSize / 1e6) / writeTime;
+                                
+                                fprintf('Completed: %s (%.2f MB in %.2fs = %.2f MB/s)', ...
+                                        currentFile.name, currentFile.expectedSize/1e6, ...
+                                        writeTime, throughput);
+                                
+                                if currentFile.errorCount > 0
+                                    errorRate = 100.0 * currentFile.errorCount / currentFile.expectedSize;
+                                    fprintf(' - ⚠ %d errors (%.4f%%)\n', currentFile.errorCount, errorRate);
+                                else
+                                    fprintf(' - ✓ Clean\n');
+                                end
+                                
+                                % Update error report
+                                report = struct();
+                                report.name = currentFile.name;
+                                report.size = currentFile.expectedSize;
+                                report.packets = ceil(currentFile.expectedSize / 1500);
+                                report.errors = currentFile.errorCount;
+                                report.errorRate = 100.0 * currentFile.errorCount / max(currentFile.expectedSize, 1);
+                                report.timestamp = datestr(now);
+                                append_file_to_report(reportPath, report);
+                                
+                                filesReceived = filesReceived + 1;
+                                
+                                % Reset for next file
+                                currentFile.active = false;
+                                currentFile.fid = -1;
+                                
+                            else
+                                fprintf('WARNING: END flag mismatch for %s\n', currentFile.name);
+                                fclose(currentFile.fid);
+                                currentFile.active = false;
+                                streamBuffer = streamBuffer(5:end);
+                            end
+                        else
+                            % Wait for more data
+                            break;
+                        end
+                    else
+                        % Write available data to file
+                        bytesToWrite = min(remainingBytes, length(streamBuffer));
+                        
+                        if bytesToWrite > 0
+                            dataToWrite = streamBuffer(1:bytesToWrite);
+                            
+                            % Write to disk IMMEDIATELY
+                            fwrite(currentFile.fid, dataToWrite, 'uint8');
+                            
+                            currentFile.writtenBytes = currentFile.writtenBytes + bytesToWrite;
+                            
+                            % Remove written data from buffer
+                            streamBuffer = streamBuffer(bytesToWrite + 1 : end);
+                            
+                            % Show progress for large files
+                            progress = 100.0 * currentFile.writtenBytes / currentFile.expectedSize;
+                            if mod(floor(progress), 10) == 0 && mod(floor(progress), 10) ~= floor(100.0 * (currentFile.writtenBytes - bytesToWrite) / currentFile.expectedSize)
+                                fprintf('  Progress: %s - %.0f%% (%.2f MB / %.2f MB)\n', ...
+                                        currentFile.name, progress, ...
+                                        currentFile.writtenBytes/1e6, currentFile.expectedSize/1e6);
+                            end
+                        else
+                            % No more data in buffer
+                            break;
+                        end
                     end
                 end
             end
+            
+            stream_time = toc(tic_stream);
 
+            % Calculate metrics
             currentTime = toc(startTime);
             elapsed = currentTime - lastTime;
             if elapsed > 0
@@ -673,81 +1006,130 @@ block_config = struct( ...
             lastBytes = totalBytes;
 
             metrics         = struct();
-            metrics.frames  = packetCount;
+            metrics.frames  = batchCount;
             metrics.gbps    = instantGbps;
             metrics.totalGB = totalBytes / 1e9;
             send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
+            
+            % Progress update
+            if mod(batchCount, 10) == 0
+                fprintf('[Batch %d] %d pkts, %d files, %.2f MB, proc: %.3fs, stream: %.3fs, buf: %.1f KB\n', ...
+                        batchCount, packetCount, filesReceived, totalBytes/1e6, ...
+                        process_time, stream_time, length(streamBuffer)/1024);
+            end
         end
 
     catch ME
+        % Close any open file on error
+        if currentFile.active && currentFile.fid ~= -1
+            fclose(currentFile.fid);
+        end
+        
         send_socket_message(socketObj, 'BLOCK_ERROR', config.blockId, config.name, ME.message);
         clear socketObj;
         rethrow(ME);
     end
 end
 
-function save_file(fileInfo, outputDir)
-    filePath = fullfile(outputDir, fileInfo.name);
-    fid = fopen(filePath, 'wb');
+function initialize_error_report(filepath)
+    fid = fopen(filepath, 'w');
     if fid == -1
-        fprintf('ERROR: Cannot create: %s\n', filePath);
+        fprintf('ERROR: Cannot create error report file\n');
         return;
     end
-    dataBytes = uint8(int32(fileInfo.data) + 128);
-    fwrite(fid, dataBytes);
-    fclose(fid);
-    fprintf('Saved: %s (%.2f KB, %d errors)\n', fileInfo.name, fileInfo.size/1024, fileInfo.errors);
-end
-
-function generate_error_report(fileStats, outputDir, reportFile)
-    reportPath = fullfile(outputDir, reportFile);
-    fid = fopen(reportPath, 'w');
-    if fid == -1, return; end
-
+    
     fprintf(fid, '========================================\n');
     fprintf(fid, 'FILE TRANSMISSION ERROR REPORT\n');
     fprintf(fid, '========================================\n');
-    fprintf(fid, 'Generated: %s\n', datestr(now));
-    fprintf(fid, 'Total files: %d\n', length(fileStats));
+    fprintf(fid, 'Started: %s\n', datestr(now));
+    fprintf(fid, 'Mode: STREAMING (on-the-fly writes)\n\n');
+    fprintf(fid, 'FILES RECEIVED:\n');
     fprintf(fid, '========================================\n\n');
-
-    totalErrors  = 0;
-    totalPackets = 0;
-    completeFiles = 0;
-
-    for i = 1:length(fileStats)
-        stat      = fileStats{i};
-        errorRate = 100.0 * stat.errors / stat.packets;
-        totalErrors  = totalErrors  + stat.errors;
-        totalPackets = totalPackets + stat.packets;
-
-        if stat.complete
-            completeFiles = completeFiles + 1;
-            status = 'COMPLETE';
-        else
-            status = 'INCOMPLETE';
-        end
-
-        fprintf(fid, 'File %d: %s [%s]\n', i, stat.name, status);
-        fprintf(fid, '  Expected Size: %.2f KB\n', stat.expected/1024);
-        fprintf(fid, '  Actual Size:   %.2f KB\n', stat.size/1024);
-        fprintf(fid, '  Packets:       %d\n', stat.packets);
-        fprintf(fid, '  Errors:        %d\n', stat.errors);
-        fprintf(fid, '  Error Rate:    %.2f%%\n', errorRate);
-        fprintf(fid, '\n');
-    end
-
-    fprintf(fid, '========================================\n');
-    fprintf(fid, 'SUMMARY\n');
-    fprintf(fid, '========================================\n');
-    fprintf(fid, 'Complete files:   %d / %d\n', completeFiles, length(fileStats));
-    fprintf(fid, 'Total packets:    %d\n', totalPackets);
-    fprintf(fid, 'Total errors:     %d\n', totalErrors);
-    if totalPackets > 0
-        fprintf(fid, 'Overall error rate: %.2f%%\n', 100.0 * totalErrors / totalPackets);
-    end
-    fprintf(fid, '========================================\n');
+    
     fclose(fid);
+end
+
+function append_file_to_report(filepath, report)
+    fid = fopen(filepath, 'a');
+    if fid == -1
+        fprintf('ERROR: Cannot append to error report file\n');
+        return;
+    end
+    
+    fprintf(fid, '[%s]\n', report.timestamp);
+    fprintf(fid, 'File: %s\n', report.name);
+    fprintf(fid, '  Size:         %d bytes (%.2f MB)\n', report.size, report.size/1e6);
+    fprintf(fid, '  Packets:      %d\n', report.packets);
+    fprintf(fid, '  Errors:       %d\n', report.errors);
+    fprintf(fid, '  Error Rate:   %.4f%%\n', report.errorRate);
+    if report.errors > 0
+        fprintf(fid, '  Status:       CORRUPTED ⚠\n');
+    else
+        fprintf(fid, '  Status:       CLEAN ✓\n');
+    end
+    fprintf(fid, '\n');
+    
+    fclose(fid);
+end
+
+function update_final_summary(filepath, totalFiles, batches, packets, errors, totalBytes)
+    fid = fopen(filepath, 'a');
+    if fid == -1
+        fprintf('ERROR: Cannot update error report file\n');
+        return;
+    end
+    
+    fprintf(fid, '========================================\n');
+    fprintf(fid, 'FINAL SUMMARY\n');
+    fprintf(fid, '========================================\n');
+    fprintf(fid, 'Completed: %s\n\n', datestr(now));
+    fprintf(fid, 'Files received: %d\n', totalFiles);
+    fprintf(fid, 'Total batches:  %d\n', batches);
+    fprintf(fid, 'Total packets:  %d\n', packets);
+    fprintf(fid, 'Total errors:   %d\n', errors);
+    fprintf(fid, 'Error rate:     %.4f%%\n', 100.0 * errors / max(packets, 1));
+    fprintf(fid, 'Total data:     %.2f MB\n', totalBytes/1e6);
+    fprintf(fid, '========================================\n');
+    
+    fclose(fid);
+end
+
+function pos = find_pattern(data, pattern)
+    pos = [];
+    if length(data) < length(pattern)
+        return;
+    end
+    
+    for i = 1:length(data) - length(pattern) + 1
+        if isequal(data(i:i+length(pattern)-1), pattern')
+            pos = i;
+            return;
+        end
+    end
+end
+
+function result = majority_vote_string(strings)
+    if isempty(strings)
+        result = '';
+        return;
+    end
+    
+    [uniqueStrings, ~, idx] = unique(strings);
+    counts = histc(idx, 1:length(uniqueStrings));
+    [~, maxIdx] = max(counts);
+    result = uniqueStrings{maxIdx};
+end
+
+function lengthBytes = calculate_length_bytes(maxCount)
+    if maxCount <= 255
+        lengthBytes = 1;
+    elseif maxCount <= 65535
+        lengthBytes = 2;
+    elseif maxCount <= 16777215
+        lengthBytes = 3;
+    else
+        lengthBytes = 4;
+    end
 end
 
 function config = parse_block_config(block_config)
@@ -758,60 +1140,78 @@ function config = parse_block_config(block_config)
     else
         config.blockId = str2double(blockIdStr);
     end
-    requiredFields = {'name', 'inputs', 'outputs', 'inputSize', 'outputSize'};
-    for i = 1:length(requiredFields)
-        if ~isfield(config, requiredFields{i})
-            error('Missing required field: %s', requiredFields{i});
-        end
+    
+    if ~isfield(config, 'inputPacketSizes')
+        error('inputPacketSizes required for batch processing');
+    end
+    if ~isfield(config, 'inputBatchSizes')
+        error('inputBatchSizes required for batch processing');
+    end
+    
+    % Convert to arrays if single values
+    if ~iscell(config.inputPacketSizes) && ~ismatrix(config.inputPacketSizes)
+        config.inputPacketSizes = [config.inputPacketSizes];
+    end
+    if ~iscell(config.inputBatchSizes) && ~ismatrix(config.inputBatchSizes)
+        config.inputBatchSizes = [config.inputBatchSizes];
     end
 end
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\blocks\file_source.m ---
 function file_source(pipeOut)
-% FILE_SOURCE - Single-pass file transmission (INSTANCE-AWARE)
+% FILE_SOURCE - Progressive file loading with continuous buffering
+% Reads files on-demand and fills buffers as data becomes available
 
 block_config = struct( ...
-    'name',            'FileSource', ...
-    'inputs',          0, ...
-    'outputs',         1, ...
-    'inputSize',       0, ...
-    'outputSize',      1500, ...
-    'LTR',             true, ...
-    'startWithAll',    false, ...
-    'socketHost',      'localhost', ...
-    'socketPort',      9001, ...
-    'sourceDirectory', 'C:\Users\amrga\Downloads\final\pipeline-editor\Test_Files', ...
-    'loopMode',        false, ...
-    'description',     'File source block - sends all files once then exits' ...
+    'name',              'FileSource', ...
+    'inputs',            0, ...
+    'outputs',           1, ...
+    'outputPacketSizes', 1500, ...
+    'outputBatchSizes',  44740, ...
+    'LTR',               true, ...
+    'startWithAll',      false, ...
+    'socketHost',        'localhost', ...
+    'socketPort',        9001, ...
+    'sourceDirectory',   'C:\Users\amrga\Downloads\final\pipeline-editor\Test_Files', ...
+    'description',       'Progressive file loading with continuous buffering' ...
 );
 
-    config     = parse_block_config(block_config);
-    PACKET_SIZE = 1500;
+    config = parse_block_config(block_config);
+    
+    % BATCH PROCESSING PARAMETERS
+    PACKET_SIZE = config.outputPacketSizes(1);
+    BATCH_SIZE = config.outputBatchSizes(1);
+    LENGTH_BYTES = calculate_length_bytes(BATCH_SIZE);
+    BUFFER_SIZE = LENGTH_BYTES + (PACKET_SIZE * BATCH_SIZE);
+    
+    % FILE PROTOCOL CONSTANTS
+    START_FLAG = uint8([0xAA, 0x55, 0xAA, 0x55]);  % 4 bytes
+    END_FLAG = uint8([0x55, 0xAA, 0x55, 0xAA]);    % 4 bytes
+    FILENAME_LENGTH = 256;  % Max filename length
+    REPETITIONS = 10;       % Repeat name and size 10 times
 
     fprintf('\n========================================\n');
-    fprintf('FILE SOURCE - Instance-Aware Socket Mode\n');
+    fprintf('FILE SOURCE - Progressive Loading\n');
     fprintf('========================================\n');
+    fprintf('Packet Size:  %d bytes\n', PACKET_SIZE);
+    fprintf('Batch Size:   %d packets\n', BATCH_SIZE);
+    fprintf('Mode:         Load files on-demand → Fill batches progressively\n');
+    fprintf('Protocol:     START(4B) + Name×10(%dB) + Size×10(%dB) + Data + END(4B)\n', ...
+            FILENAME_LENGTH * REPETITIONS, 8 * REPETITIONS);
 
     % Get instance-specific MATLAB port from environment
     matlabPortStr = getenv('MATLAB_PORT');
     if ~isempty(matlabPortStr)
         matlabPort = str2double(matlabPortStr);
-        fprintf('Instance MATLAB Port: %d\n', matlabPort);
     else
         matlabPort = config.socketPort;
-        fprintf('Warning: Using default port: %d\n', matlabPort);
     end
-
-    fprintf('Connecting to socket %s:%d...\n', config.socketHost, matlabPort);
 
     socketObj = matlab_socket_client(config.socketHost, matlabPort, 10);
 
     if isempty(socketObj)
         error('Failed to connect to socket server. Make sure Electron is running!');
     end
-
-    fprintf('? Socket connected\n');
-    fprintf('========================================\n\n');
 
     send_socket_message(socketObj, 'BLOCK_INIT', config.blockId, config.name, '');
 
@@ -826,12 +1226,11 @@ block_config = struct( ...
 
         send_socket_message(socketObj, 'BLOCK_READY', config.blockId, config.name, '');
 
-        packetCount = 0;
-        totalBytes  = 0;
-        startTime   = tic;
-        lastTime    = 0;
-        lastBytes   = 0;
-        instantGbps = 0;
+        batchCount = 0;
+        totalBytes = 0;
+        startTime  = tic;
+        lastTime   = 0;
+        lastBytes  = 0;
 
         fileList = dir(fullfile(config.sourceDirectory, '*.*'));
         fileList = fileList(~[fileList.isdir]);
@@ -843,91 +1242,146 @@ block_config = struct( ...
             return;
         end
 
-        fprintf('Found %d file(s) to send\n\n', length(fileList));
+        fprintf('Found %d file(s) to send\n', length(fileList));
+        fprintf('========================================\n\n');
 
-        for fileIdx = 1:length(fileList)
-            fileName = fileList(fileIdx).name;
-            filePath = fullfile(config.sourceDirectory, fileName);
-
-            fprintf('Sending: %s\n', fileName);
-
-            fid = fopen(filePath, 'rb');
-            if fid == -1
-                fprintf('ERROR: Cannot open: %s\n', fileName);
-                continue;
+        % ===== PROGRESSIVE FILE LOADING AND BUFFERING =====
+        streamBuffer = [];  % Running buffer of data to send
+        currentFileIdx = 1;
+        totalBatchBytes = BATCH_SIZE * PACKET_SIZE;  % Size of one full batch
+        
+        while currentFileIdx <= length(fileList) || ~isempty(streamBuffer)
+            
+            % Fill buffer with files until we have enough for a batch OR all files loaded
+            while currentFileIdx <= length(fileList) && length(streamBuffer) < totalBatchBytes
+                fileName = fileList(currentFileIdx).name;
+                filePath = fullfile(config.sourceDirectory, fileName);
+                
+                % Read current file
+                fid = fopen(filePath, 'rb');
+                if fid == -1
+                    fprintf('WARNING: Cannot open: %s (skipping)\n', fileName);
+                    currentFileIdx = currentFileIdx + 1;
+                    continue;
+                end
+                fileData = fread(fid, '*uint8');
+                fclose(fid);
+                
+                fileSize = length(fileData);
+                fprintf('Loading file %d/%d: %s (%.2f KB)\n', currentFileIdx, length(fileList), fileName, fileSize/1024);
+                
+                % ===== BUILD FILE PACKET STRUCTURE =====
+                % Prepare filename (pad or truncate to 256 bytes)
+                fileNameBytes = uint8(zeros(FILENAME_LENGTH, 1));
+                nameBytes = uint8(fileName);
+                nameLen = min(length(nameBytes), FILENAME_LENGTH);
+                fileNameBytes(1:nameLen) = nameBytes(1:nameLen);
+                
+                % Prepare file size as uint64 (8 bytes, little-endian)
+                fileSizeBytes = typecast(uint64(fileSize), 'uint8')';
+                
+                % Build metadata for this file
+                fileStream = [];
+                
+                % START FLAG
+                fileStream = [fileStream; START_FLAG(:)];
+                
+                % FILENAME × 10
+                for rep = 1:REPETITIONS
+                    fileStream = [fileStream; fileNameBytes];
+                end
+                
+                % FILESIZE × 10
+                for rep = 1:REPETITIONS
+                    fileStream = [fileStream; fileSizeBytes];
+                end
+                
+                % FILE DATA
+                fileStream = [fileStream; fileData];
+                
+                % END FLAG
+                fileStream = [fileStream; END_FLAG(:)];
+                
+                % Append to stream buffer
+                streamBuffer = [streamBuffer; fileStream];
+                
+                fprintf('  Added to buffer: %d bytes (total buffer: %.2f KB)\n', ...
+                        length(fileStream), length(streamBuffer)/1024);
+                
+                currentFileIdx = currentFileIdx + 1;
+                
+                % Send batch immediately if buffer is full enough
+                if length(streamBuffer) >= totalBatchBytes
+                    break;  % Exit file loading loop to send batch
+                end
             end
-            fileData = fread(fid, '*uint8');
-            fclose(fid);
-
-            actualFileSize = length(fileData);
-
-            % START marker
-            startPacket = create_start_marker(PACKET_SIZE);
-            pipeline_mex('write', pipeOut, startPacket);
-            packetCount = packetCount + 1;
-            totalBytes  = totalBytes + PACKET_SIZE;
-
-            % Header
-            headerPacket = create_file_header(fileName, actualFileSize, PACKET_SIZE);
-            pipeline_mex('write', pipeOut, headerPacket);
-            packetCount = packetCount + 1;
-            totalBytes  = totalBytes + PACKET_SIZE;
-
-            % Data packets
-            numPackets = ceil(length(fileData) / PACKET_SIZE);
-            for pktIdx = 1:numPackets
-                startIdx = (pktIdx - 1) * PACKET_SIZE + 1;
-                endIdx   = min(pktIdx * PACKET_SIZE, length(fileData));
-
-                packet  = zeros(PACKET_SIZE, 1, 'int8');
-                dataLen = endIdx - startIdx + 1;
-                packet(1:dataLen) = int8(int32(fileData(startIdx:endIdx)) - 128);
-
-                pipeline_mex('write', pipeOut, packet);
-
-                packetCount = packetCount + 1;
-                totalBytes  = totalBytes + PACKET_SIZE;
+            
+            % Send batches from buffer
+            while ~isempty(streamBuffer)
+                
+                % Determine how many packets to send in this batch
+                availableBytes = length(streamBuffer);
+                maxPacketsFromBuffer = ceil(availableBytes / PACKET_SIZE);  % Changed floor to ceil
+                packetsInThisBatch = min(BATCH_SIZE, maxPacketsFromBuffer);
+                
+                if packetsInThisBatch == 0
+                    break;  % No more data to send
+                end
+                
+                % Create batch buffer
+                batch = zeros(BATCH_SIZE * PACKET_SIZE, 1, 'int8');
+                bytesToSend = min(packetsInThisBatch * PACKET_SIZE, availableBytes);
+                
+                % Extract data from buffer
+                dataToSend = streamBuffer(1:min(availableBytes, packetsInThisBatch * PACKET_SIZE));
+                streamBuffer(1:length(dataToSend)) = [];  % Remove sent data
+                
+                % Fill batch
+                dataLen = length(dataToSend);
+                batch(1:dataLen) = int8(int32(dataToSend) - 128);
+                
+                % Send batch
+                write_batch(pipeOut, batch, packetsInThisBatch, LENGTH_BYTES);
+                batchCount = batchCount + 1;
+                totalBytes = totalBytes + BUFFER_SIZE;
+                
+                if mod(batchCount, 10) == 1 || isempty(streamBuffer)
+                    fprintf('Sent batch %d (%d packets, buffer remaining: %.2f KB)\n', ...
+                            batchCount, packetsInThisBatch, length(streamBuffer)/1024);
+                end
 
                 currentTime = toc(startTime);
                 elapsed = currentTime - lastTime;
                 if elapsed > 0
                     instantGbps = ((totalBytes - lastBytes) * 8 / 1e9) / elapsed;
+                else
+                    instantGbps = 0;
                 end
                 lastTime  = currentTime;
                 lastBytes = totalBytes;
 
                 metrics        = struct();
-                metrics.frames = packetCount;
+                metrics.frames = batchCount;
                 metrics.gbps   = instantGbps;
                 metrics.totalGB = totalBytes / 1e9;
                 send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
             end
-
-            % END marker
-            endPacket = create_end_marker(PACKET_SIZE);
-            pipeline_mex('write', pipeOut, endPacket);
-            packetCount = packetCount + 1;
-            totalBytes  = totalBytes + PACKET_SIZE;
-
-            metrics        = struct();
-            metrics.frames = packetCount;
-            metrics.gbps   = instantGbps;
-            metrics.totalGB = totalBytes / 1e9;
-            send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, metrics);
-
-            fprintf('  Sent: %d packets (%.2f KB)\n', numPackets, actualFileSize/1024);
+            
+            % Exit if all files processed and buffer empty
+            if currentFileIdx > length(fileList) && isempty(streamBuffer)
+                break;
+            end
         end
 
         fprintf('\n========================================\n');
         fprintf('TRANSMISSION COMPLETE\n');
         fprintf('========================================\n');
-        fprintf('Total files sent: %d\n', length(fileList));
-        fprintf('Total packets:    %d\n', packetCount);
-        fprintf('Total data:       %.2f MB\n', totalBytes/1e6);
+        fprintf('Total files sent:  %d\n', length(fileList));
+        fprintf('Total batches:     %d\n', batchCount);
         fprintf('========================================\n');
 
         finalMetrics        = struct();
-        finalMetrics.frames = packetCount;
+        finalMetrics.frames = batchCount;
         finalMetrics.gbps   = 0;
         finalMetrics.totalGB = totalBytes / 1e9;
         send_socket_message(socketObj, 'BLOCK_METRICS', config.blockId, config.name, finalMetrics);
@@ -946,31 +1400,33 @@ block_config = struct( ...
     end
 end
 
-function headerPacket = create_file_header(fileName, fileSize, PACKET_SIZE)
-    headerPacket = zeros(PACKET_SIZE, 1, 'int8');
-    headerPacket(1:4) = int8(int32([0x46, 0x49, 0x4C, 0x45]) - 128);
-    fileNameBytes = uint8(fileName);
-    nameLen = length(fileNameBytes);
-    headerPacket(5) = int8(int32(bitand(nameLen, 0xFF)) - 128);
-    headerPacket(6) = int8(int32(bitshift(nameLen, -8)) - 128);
-    for i = 1:nameLen
-        headerPacket(6 + i) = int8(int32(fileNameBytes(i)) - 128);
-    end
-    sizePos    = 7 + nameLen;
-    fileSize64 = uint64(fileSize);
-    for i = 0:7
-        headerPacket(sizePos + i) = int8(int32(bitand(bitshift(fileSize64, -8*i), uint64(0xFF))) - 128);
+function lengthBytes = calculate_length_bytes(maxCount)
+    if maxCount <= 255
+        lengthBytes = 1;
+    elseif maxCount <= 65535
+        lengthBytes = 2;
+    elseif maxCount <= 16777215
+        lengthBytes = 3;
+    else
+        lengthBytes = 4;
     end
 end
 
-function startPacket = create_start_marker(PACKET_SIZE)
-    startPacket = zeros(PACKET_SIZE, 1, 'int8');
-    startPacket(1:4) = int8(int32([0x53, 0x54, 0x41, 0x52]) - 128);
-end
-
-function endPacket = create_end_marker(PACKET_SIZE)
-    endPacket = zeros(PACKET_SIZE, 1, 'int8');
-    endPacket(1:4) = int8(int32([0x45, 0x4E, 0x44, 0x00]) - 128);
+function write_batch(pipeOut, batchData, actualCount, lengthBytes)
+    bufferSize = lengthBytes + length(batchData);
+    buffer = zeros(bufferSize, 1, 'int8');
+    
+    % Write length header (little-endian)
+    count32 = uint32(actualCount);
+    for i = 1:lengthBytes
+        byteVal = bitand(bitshift(count32, -(i-1)*8), uint32(0xFF));
+        buffer(i) = int8(int32(byteVal) - 128);
+    end
+    
+    % Write batch data
+    buffer(lengthBytes + 1 : end) = batchData;
+    
+    pipeline_mex('write', pipeOut, buffer);
 end
 
 function config = parse_block_config(block_config)
@@ -981,11 +1437,20 @@ function config = parse_block_config(block_config)
     else
         config.blockId = str2double(blockIdStr);
     end
-    requiredFields = {'name', 'inputs', 'outputs', 'inputSize', 'outputSize'};
-    for i = 1:length(requiredFields)
-        if ~isfield(config, requiredFields{i})
-            error('Missing required field: %s', requiredFields{i});
-        end
+    
+    if ~isfield(config, 'outputPacketSizes')
+        error('outputPacketSizes required for batch processing');
+    end
+    if ~isfield(config, 'outputBatchSizes')
+        error('outputBatchSizes required for batch processing');
+    end
+    
+    % Convert to arrays if single values
+    if ~iscell(config.outputPacketSizes) && ~ismatrix(config.outputPacketSizes)
+        config.outputPacketSizes = [config.outputPacketSizes];
+    end
+    if ~iscell(config.outputBatchSizes) && ~ismatrix(config.outputBatchSizes)
+        config.outputBatchSizes = [config.outputBatchSizes];
     end
 end
 
@@ -2087,8 +2552,10 @@ const PipelineEditor = () => {
     const block = selectedBlocks[0];
     
     try {
+      // RE-PARSE the block with updated code
       const reparsedData = parseMatlabBlock(updatedCode, block.fileName);
       
+      // Calculate new port positions
       const newPortPositions = calculatePortPositions(
         reparsedData.inputs, 
         reparsedData.outputs, 
@@ -2098,6 +2565,7 @@ const PipelineEditor = () => {
         GRID_SIZE
       );
       
+      // Create updated block with ALL new batch processing fields
       const updatedBlock = { 
         ...block, 
         code: updatedCode,
@@ -2105,11 +2573,24 @@ const PipelineEditor = () => {
         inputs: reparsedData.inputs,
         outputs: reparsedData.outputs,
         config: reparsedData.config,
+        
+        // BATCH PROCESSING FIELDS (NEW)
+        inputPacketSizes: reparsedData.inputPacketSizes,
+        inputBatchSizes: reparsedData.inputBatchSizes,
+        outputPacketSizes: reparsedData.outputPacketSizes,
+        outputBatchSizes: reparsedData.outputBatchSizes,
+        inputBufferSizes: reparsedData.inputBufferSizes,
+        outputBufferSizes: reparsedData.outputBufferSizes,
+        inputLengthBytes: reparsedData.inputLengthBytes,
+        outputLengthBytes: reparsedData.outputLengthBytes,
+        
+        // Legacy fields (for backward compatibility)
         sizeRelation: reparsedData.sizeRelation,
         inputSize: reparsedData.inputSize,
         outputSize: reparsedData.outputSize,
         inputSizes: reparsedData.inputSizes,
         outputSizes: reparsedData.outputSizes,
+        
         portPositions: newPortPositions,
         ltr: reparsedData.ltr,
         startWithAll: reparsedData.startWithAll,
@@ -2118,6 +2599,7 @@ const PipelineEditor = () => {
         description: reparsedData.description
       };
       
+      // Check if any connections need to be removed due to port changes
       const removedConnections = connections.filter(conn => {
         if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) {
           return true;
@@ -2143,7 +2625,7 @@ const PipelineEditor = () => {
       setIsEditingCode(false);
     } catch (error) {
       addLog('error', `Failed to parse updated code: ${error.message}`);
-      alert(`Error updating block:\n${error.message}\n\nPlease check your @BlockConfig section.`);
+      alert(`Error updating block:\n${error.message}\n\nPlease check your block_config section.`);
     }
   };
 
@@ -5389,16 +5871,23 @@ export const useServerOperations = ({
       
       let serverCmd = `pipe_server.exe ${connections.length} ${serverPort}`;
       
+      // BATCH PROCESSING: Use buffer size from output port (includes length header + all packets)
       connections.forEach((conn, i) => {
         const fromBlock = sortedBlocks.find(b => b.id === conn.fromBlock);
         
         let size = 67108864; // default 64MB
-        if (fromBlock) {
-          if (Array.isArray(fromBlock.outputSize)) {
-            size = fromBlock.outputSize[conn.fromPort] || fromBlock.outputSize[0] || size;
-          } else {
-            size = fromBlock.outputSize || size;
-          }
+        if (fromBlock && fromBlock.outputBufferSizes && fromBlock.outputBufferSizes[conn.fromPort]) {
+          // Use the TOTAL buffer size (length header + packet_size × batch_size)
+          size = fromBlock.outputBufferSizes[conn.fromPort];
+          
+          const packetSize = fromBlock.outputPacketSizes[conn.fromPort];
+          const batchSize = fromBlock.outputBatchSizes[conn.fromPort];
+          const lengthBytes = fromBlock.outputLengthBytes[conn.fromPort];
+          
+          addLog('info', 
+            `Pipe ${i}: ${fromBlock.name} port ${conn.fromPort} - ` +
+            `${packetSize}×${batchSize} (${lengthBytes}B header + ${(size - lengthBytes) / 1024}KB data = ${(size / 1024).toFixed(2)}KB total)`
+          );
         }
         
         serverCmd += ` ${pipes[i]} ${size}`;
@@ -5727,31 +6216,23 @@ export const useServerOperations = ({
   };
 };
 
-
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\utils\blockUtils.js ---
 export const GRID_SIZE = 20;
 export const BLOCK_WIDTH = 140;
 export const BLOCK_HEIGHT = 80;
 
 /**
- * Parse a MATLAB block_config struct literal.
+ * Parse a MATLAB block_config struct literal with BATCH PROCESSING support.
  *
- * Supports the form:
+ * New batch processing fields:
+ *   - inputPacketSizes:  array of packet sizes (bytes) per input port
+ *   - inputBatchSizes:   array of batch counts (packets) per input port
+ *   - outputPacketSizes: array of packet sizes (bytes) per output port
+ *   - outputBatchSizes:  array of batch counts (packets) per output port
  *
- *   block_config = struct( ...
- *       'name',       'CrcEncode', ...
- *       'inputs',     1, ...
- *       'outputSize', 1504, ...
- *       'LTR',        true, ...
- *   );
- *
- * Keys and values may be separated by commas and continuation ellipses (...).
- * Values may be:
- *   - Strings (single-quoted MATLAB style)  'hello'
- *   - Booleans                              true / false
- *   - Integers / floats                     1, 3.14
- *   - Hex literals                          0x04C11DB7
- *   - Numeric arrays                        [1500, 1504]
+ * Backward compatibility:
+ *   - Old format (inputSize/outputSize) auto-converted to:
+ *     inputPacketSizes = [inputSize], inputBatchSizes = [1]
  */
 const parseMatlabStruct = (fileContent) => {
   // Match block_config = struct( ... );  — spans multiple lines
@@ -5803,6 +6284,25 @@ const parseMatlabStruct = (fileContent) => {
   return Object.keys(config).length > 0 ? config : null;
 };
 
+/**
+ * Calculate the number of bytes needed to represent a count
+ * (e.g., if batchSize is 10, we need 1 byte; if 300, we need 2 bytes)
+ */
+const calculateLengthBytes = (maxCount) => {
+  if (maxCount <= 255) return 1;           // uint8
+  if (maxCount <= 65535) return 2;         // uint16
+  if (maxCount <= 16777215) return 3;      // uint24
+  return 4;                                 // uint32
+};
+
+/**
+ * Calculate total buffer size including length header and all packets
+ */
+const calculateBufferSize = (packetSize, batchSize) => {
+  const lengthBytes = calculateLengthBytes(batchSize);
+  return lengthBytes + (packetSize * batchSize);
+};
+
 export const parseMatlabBlock = (fileContent, fileName) => {
   const config = parseMatlabStruct(fileContent);
 
@@ -5812,13 +6312,15 @@ export const parseMatlabBlock = (fileContent, fileName) => {
       'Add a block_config = struct(...); definition to your MATLAB file.\n\n' +
       'Example:\n' +
       "block_config = struct( ...\n" +
-      "    'name',        'MyBlock', ...\n" +
-      "    'inputs',      1, ...\n" +
-      "    'outputs',     1, ...\n" +
-      "    'inputSize',   1500, ...\n" +
-      "    'outputSize',  1500, ...\n" +
-      "    'LTR',         true, ...\n" +
-      "    'startWithAll', true ...\n" +
+      "    'name',              'MyBlock', ...\n" +
+      "    'inputs',            1, ...\n" +
+      "    'outputs',           1, ...\n" +
+      "    'inputPacketSizes',  1500, ...\n" +
+      "    'inputBatchSizes',   10, ...\n" +
+      "    'outputPacketSizes', 1500, ...\n" +
+      "    'outputBatchSizes',  10, ...\n" +
+      "    'LTR',               true, ...\n" +
+      "    'startWithAll',      true ...\n" +
       ");"
     );
   }
@@ -5826,15 +6328,67 @@ export const parseMatlabBlock = (fileContent, fileName) => {
   const numInputs  = typeof config.inputs  === 'number' ? config.inputs  : 1;
   const numOutputs = typeof config.outputs === 'number' ? config.outputs : 1;
 
-  let inputSize  = config.inputSize  || 0;
-  let outputSize = config.outputSize || 0;
+  // ===== BATCH PROCESSING SUPPORT =====
+  
+  // Parse packet sizes
+  let inputPacketSizes = config.inputPacketSizes;
+  let outputPacketSizes = config.outputPacketSizes;
+  
+  // Parse batch sizes
+  let inputBatchSizes = config.inputBatchSizes;
+  let outputBatchSizes = config.outputBatchSizes;
+  
+  // BACKWARD COMPATIBILITY: Convert old format
+  if (!inputPacketSizes && config.inputSize !== undefined) {
+    inputPacketSizes = config.inputSize;
+    inputBatchSizes = 1;  // Default to single packet batch
+    console.log(`[${fileName}] Auto-converted old inputSize to batch format`);
+  }
+  
+  if (!outputPacketSizes && config.outputSize !== undefined) {
+    outputPacketSizes = config.outputSize;
+    outputBatchSizes = 1;  // Default to single packet batch
+    console.log(`[${fileName}] Auto-converted old outputSize to batch format`);
+  }
+  
+  // Ensure arrays
+  inputPacketSizes = Array.isArray(inputPacketSizes) ? inputPacketSizes : [inputPacketSizes || 0];
+  inputBatchSizes = Array.isArray(inputBatchSizes) ? inputBatchSizes : [inputBatchSizes || 1];
+  outputPacketSizes = Array.isArray(outputPacketSizes) ? outputPacketSizes : [outputPacketSizes || 0];
+  outputBatchSizes = Array.isArray(outputBatchSizes) ? outputBatchSizes : [outputBatchSizes || 1];
+  
+  // Validate array lengths match port counts
+  if (numInputs > 0 && inputPacketSizes.length !== numInputs) {
+    throw new Error(`inputPacketSizes array length (${inputPacketSizes.length}) must match inputs (${numInputs})`);
+  }
+  if (numInputs > 0 && inputBatchSizes.length !== numInputs) {
+    throw new Error(`inputBatchSizes array length (${inputBatchSizes.length}) must match inputs (${numInputs})`);
+  }
+  if (numOutputs > 0 && outputPacketSizes.length !== numOutputs) {
+    throw new Error(`outputPacketSizes array length (${outputPacketSizes.length}) must match outputs (${numOutputs})`);
+  }
+  if (numOutputs > 0 && outputBatchSizes.length !== numOutputs) {
+    throw new Error(`outputBatchSizes array length (${outputBatchSizes.length}) must match outputs (${numOutputs})`);
+  }
+  
+  // Calculate buffer sizes (with length header)
+  const inputBufferSizes = inputPacketSizes.map((packetSize, i) => 
+    calculateBufferSize(packetSize, inputBatchSizes[i])
+  );
+  
+  const outputBufferSizes = outputPacketSizes.map((packetSize, i) => 
+    calculateBufferSize(packetSize, outputBatchSizes[i])
+  );
+  
+  // Calculate length header sizes
+  const inputLengthBytes = inputBatchSizes.map(calculateLengthBytes);
+  const outputLengthBytes = outputBatchSizes.map(calculateLengthBytes);
+  
+  // Total sizes for backward compatibility and display
+  const totalInputSize = inputBufferSizes.reduce((a, b) => a + b, 0);
+  const totalOutputSize = outputBufferSizes.reduce((a, b) => a + b, 0);
 
-  const inputSizes  = Array.isArray(inputSize)  ? inputSize  : [inputSize];
-  const outputSizes = Array.isArray(outputSize) ? outputSize : [outputSize];
-
-  const totalInputSize  = inputSizes.reduce((a, b)  => a + b, 0);
-  const totalOutputSize = outputSizes.reduce((a, b) => a + b, 0);
-
+  // Size relation (for display)
   let sizeRelation;
   if (totalInputSize === 0) {
     sizeRelation = { type: 'source', description: 'Data source' };
@@ -5847,14 +6401,14 @@ export const parseMatlabBlock = (fileContent, fileName) => {
     sizeRelation = {
       type: 'multiply',
       factor: ratio,
-      description: `×${ratio} (${config.description || 'increases size'})`
+      description: `×${ratio.toFixed(2)} (${config.description || 'increases size'})`
     };
   } else {
     const ratio = totalInputSize / totalOutputSize;
     sizeRelation = {
       type: 'divide',
       factor: ratio,
-      description: `÷${ratio} (${config.description || 'decreases size'})`
+      description: `÷${ratio.toFixed(2)} (${config.description || 'decreases size'})`
     };
   }
 
@@ -5868,10 +6422,23 @@ export const parseMatlabBlock = (fileContent, fileName) => {
     code:         fileContent,
     inputs:       numInputs,
     outputs:      numOutputs,
-    inputSize,
-    outputSize,
-    inputSizes,
-    outputSizes,
+    
+    // NEW BATCH PROCESSING FIELDS
+    inputPacketSizes,      // Array: bytes per packet for each input
+    inputBatchSizes,       // Array: packets per batch for each input
+    outputPacketSizes,     // Array: bytes per packet for each output
+    outputBatchSizes,      // Array: packets per batch for each output
+    inputBufferSizes,      // Array: total buffer size (with length header) for each input
+    outputBufferSizes,     // Array: total buffer size (with length header) for each output
+    inputLengthBytes,      // Array: length header size for each input
+    outputLengthBytes,     // Array: length header size for each output
+    
+    // LEGACY FIELDS (for backward compatibility)
+    inputSize: totalInputSize,
+    outputSize: totalOutputSize,
+    inputSizes: inputBufferSizes,
+    outputSizes: outputBufferSizes,
+    
     description:  config.description || 'No description',
     config,
     color:        isGraph ? '#9333ea' : generateColor(config.name || fileName.replace('.m', '')),
@@ -6100,30 +6667,86 @@ export const getConnectionAtPoint = (x, y, connections, blocks, snapToGrid) => {
   return null;
 };
 
+/**
+ * STRICT BATCH MATCHING VALIDATION
+ * 
+ * Both packet size AND batch size must match exactly.
+ * No automatic conversions allowed.
+ * 
+ * Connection format: packetSize × batchSize (matrix dimensions)
+ */
 export const validateConnection = (fromBlock, fromPort, toBlock, toPort, blocks, addLog) => {
   const sourceBlock = blocks.find(b => b.id === fromBlock);
   const targetBlock = blocks.find(b => b.id === toBlock);
   
   if (!sourceBlock || !targetBlock) return false;
   
-  // Get the size for the specific port
-  const getPortSize = (block, portIndex, isOutput) => {
-    const sizes = isOutput ? block.outputSizes : block.inputSizes;
-    if (Array.isArray(sizes) && sizes.length > portIndex) {
-      return sizes[portIndex];
+  // Get batch parameters for the specific ports
+  const getPortBatchParams = (block, portIndex, isOutput) => {
+    if (isOutput) {
+      const packetSizes = block.outputPacketSizes || [];
+      const batchSizes = block.outputBatchSizes || [];
+      return {
+        packetSize: packetSizes[portIndex] || 0,
+        batchSize: batchSizes[portIndex] || 1,
+        lengthBytes: block.outputLengthBytes ? block.outputLengthBytes[portIndex] : 0,
+        bufferSize: block.outputBufferSizes ? block.outputBufferSizes[portIndex] : 0
+      };
+    } else {
+      const packetSizes = block.inputPacketSizes || [];
+      const batchSizes = block.inputBatchSizes || [];
+      return {
+        packetSize: packetSizes[portIndex] || 0,
+        batchSize: batchSizes[portIndex] || 1,
+        lengthBytes: block.inputLengthBytes ? block.inputLengthBytes[portIndex] : 0,
+        bufferSize: block.inputBufferSizes ? block.inputBufferSizes[portIndex] : 0
+      };
     }
-    // Fallback to single size
-    return isOutput ? block.outputSize : block.inputSize;
   };
   
-  const sourceSize = getPortSize(sourceBlock, fromPort, true);
-  const targetSize = getPortSize(targetBlock, toPort, false);
+  const source = getPortBatchParams(sourceBlock, fromPort, true);
+  const target = getPortBatchParams(targetBlock, toPort, false);
   
-  if (sourceSize !== targetSize) {
-    addLog('error', `Size mismatch: ${sourceBlock.name} output port ${fromPort} (${(sourceSize / 1024 / 1024).toFixed(2)}MB) ` +
-                    `!= ${targetBlock.name} input port ${toPort} (${(targetSize / 1024 / 1024).toFixed(2)}MB)`);
+  // STRICT VALIDATION: Both dimensions must match
+  
+  // Check 1: Packet size must match exactly
+  if (source.packetSize !== target.packetSize) {
+    addLog('error', 
+      `❌ Packet size mismatch:\n` +
+      `${sourceBlock.name} output port ${fromPort}: ${source.packetSize} bytes/packet\n` +
+      `${targetBlock.name} input port ${toPort}: ${target.packetSize} bytes/packet\n` +
+      `Matrix dimensions must match exactly.`
+    );
     return false;
   }
+  
+  // Check 2: Batch size must match exactly
+  if (source.batchSize !== target.batchSize) {
+    addLog('error', 
+      `❌ Batch size mismatch:\n` +
+      `${sourceBlock.name} output port ${fromPort}: ${source.batchSize} packets/batch\n` +
+      `${targetBlock.name} input port ${toPort}: ${target.batchSize} packets/batch\n` +
+      `Matrix dimensions must match exactly.`
+    );
+    return false;
+  }
+  
+  // Check 3: Buffer size should match (including length header)
+  if (source.bufferSize !== target.bufferSize) {
+    addLog('error', 
+      `❌ Buffer size mismatch:\n` +
+      `${sourceBlock.name} output port ${fromPort}: ${source.bufferSize} bytes total\n` +
+      `${targetBlock.name} input port ${toPort}: ${target.bufferSize} bytes total\n` +
+      `This shouldn't happen if packet and batch sizes match - check configuration.`
+    );
+    return false;
+  }
+  
+  // All checks passed
+  addLog('success', 
+    `✅ Connection valid: ${source.packetSize}×${source.batchSize} ` +
+    `(${(source.bufferSize / 1024).toFixed(2)} KB total)`
+  );
   
   return true;
 };

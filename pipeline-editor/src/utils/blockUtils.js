@@ -3,24 +3,17 @@ export const BLOCK_WIDTH = 140;
 export const BLOCK_HEIGHT = 80;
 
 /**
- * Parse a MATLAB block_config struct literal.
+ * Parse a MATLAB block_config struct literal with BATCH PROCESSING support.
  *
- * Supports the form:
+ * New batch processing fields:
+ *   - inputPacketSizes:  array of packet sizes (bytes) per input port
+ *   - inputBatchSizes:   array of batch counts (packets) per input port
+ *   - outputPacketSizes: array of packet sizes (bytes) per output port
+ *   - outputBatchSizes:  array of batch counts (packets) per output port
  *
- *   block_config = struct( ...
- *       'name',       'CrcEncode', ...
- *       'inputs',     1, ...
- *       'outputSize', 1504, ...
- *       'LTR',        true, ...
- *   );
- *
- * Keys and values may be separated by commas and continuation ellipses (...).
- * Values may be:
- *   - Strings (single-quoted MATLAB style)  'hello'
- *   - Booleans                              true / false
- *   - Integers / floats                     1, 3.14
- *   - Hex literals                          0x04C11DB7
- *   - Numeric arrays                        [1500, 1504]
+ * Backward compatibility:
+ *   - Old format (inputSize/outputSize) auto-converted to:
+ *     inputPacketSizes = [inputSize], inputBatchSizes = [1]
  */
 const parseMatlabStruct = (fileContent) => {
   // Match block_config = struct( ... );  — spans multiple lines
@@ -72,6 +65,25 @@ const parseMatlabStruct = (fileContent) => {
   return Object.keys(config).length > 0 ? config : null;
 };
 
+/**
+ * Calculate the number of bytes needed to represent a count
+ * (e.g., if batchSize is 10, we need 1 byte; if 300, we need 2 bytes)
+ */
+const calculateLengthBytes = (maxCount) => {
+  if (maxCount <= 255) return 1;           // uint8
+  if (maxCount <= 65535) return 2;         // uint16
+  if (maxCount <= 16777215) return 3;      // uint24
+  return 4;                                 // uint32
+};
+
+/**
+ * Calculate total buffer size including length header and all packets
+ */
+const calculateBufferSize = (packetSize, batchSize) => {
+  const lengthBytes = calculateLengthBytes(batchSize);
+  return lengthBytes + (packetSize * batchSize);
+};
+
 export const parseMatlabBlock = (fileContent, fileName) => {
   const config = parseMatlabStruct(fileContent);
 
@@ -81,13 +93,15 @@ export const parseMatlabBlock = (fileContent, fileName) => {
       'Add a block_config = struct(...); definition to your MATLAB file.\n\n' +
       'Example:\n' +
       "block_config = struct( ...\n" +
-      "    'name',        'MyBlock', ...\n" +
-      "    'inputs',      1, ...\n" +
-      "    'outputs',     1, ...\n" +
-      "    'inputSize',   1500, ...\n" +
-      "    'outputSize',  1500, ...\n" +
-      "    'LTR',         true, ...\n" +
-      "    'startWithAll', true ...\n" +
+      "    'name',              'MyBlock', ...\n" +
+      "    'inputs',            1, ...\n" +
+      "    'outputs',           1, ...\n" +
+      "    'inputPacketSizes',  1500, ...\n" +
+      "    'inputBatchSizes',   10, ...\n" +
+      "    'outputPacketSizes', 1500, ...\n" +
+      "    'outputBatchSizes',  10, ...\n" +
+      "    'LTR',               true, ...\n" +
+      "    'startWithAll',      true ...\n" +
       ");"
     );
   }
@@ -95,15 +109,67 @@ export const parseMatlabBlock = (fileContent, fileName) => {
   const numInputs  = typeof config.inputs  === 'number' ? config.inputs  : 1;
   const numOutputs = typeof config.outputs === 'number' ? config.outputs : 1;
 
-  let inputSize  = config.inputSize  || 0;
-  let outputSize = config.outputSize || 0;
+  // ===== BATCH PROCESSING SUPPORT =====
+  
+  // Parse packet sizes
+  let inputPacketSizes = config.inputPacketSizes;
+  let outputPacketSizes = config.outputPacketSizes;
+  
+  // Parse batch sizes
+  let inputBatchSizes = config.inputBatchSizes;
+  let outputBatchSizes = config.outputBatchSizes;
+  
+  // BACKWARD COMPATIBILITY: Convert old format
+  if (!inputPacketSizes && config.inputSize !== undefined) {
+    inputPacketSizes = config.inputSize;
+    inputBatchSizes = 1;  // Default to single packet batch
+    console.log(`[${fileName}] Auto-converted old inputSize to batch format`);
+  }
+  
+  if (!outputPacketSizes && config.outputSize !== undefined) {
+    outputPacketSizes = config.outputSize;
+    outputBatchSizes = 1;  // Default to single packet batch
+    console.log(`[${fileName}] Auto-converted old outputSize to batch format`);
+  }
+  
+  // Ensure arrays
+  inputPacketSizes = Array.isArray(inputPacketSizes) ? inputPacketSizes : [inputPacketSizes || 0];
+  inputBatchSizes = Array.isArray(inputBatchSizes) ? inputBatchSizes : [inputBatchSizes || 1];
+  outputPacketSizes = Array.isArray(outputPacketSizes) ? outputPacketSizes : [outputPacketSizes || 0];
+  outputBatchSizes = Array.isArray(outputBatchSizes) ? outputBatchSizes : [outputBatchSizes || 1];
+  
+  // Validate array lengths match port counts
+  if (numInputs > 0 && inputPacketSizes.length !== numInputs) {
+    throw new Error(`inputPacketSizes array length (${inputPacketSizes.length}) must match inputs (${numInputs})`);
+  }
+  if (numInputs > 0 && inputBatchSizes.length !== numInputs) {
+    throw new Error(`inputBatchSizes array length (${inputBatchSizes.length}) must match inputs (${numInputs})`);
+  }
+  if (numOutputs > 0 && outputPacketSizes.length !== numOutputs) {
+    throw new Error(`outputPacketSizes array length (${outputPacketSizes.length}) must match outputs (${numOutputs})`);
+  }
+  if (numOutputs > 0 && outputBatchSizes.length !== numOutputs) {
+    throw new Error(`outputBatchSizes array length (${outputBatchSizes.length}) must match outputs (${numOutputs})`);
+  }
+  
+  // Calculate buffer sizes (with length header)
+  const inputBufferSizes = inputPacketSizes.map((packetSize, i) => 
+    calculateBufferSize(packetSize, inputBatchSizes[i])
+  );
+  
+  const outputBufferSizes = outputPacketSizes.map((packetSize, i) => 
+    calculateBufferSize(packetSize, outputBatchSizes[i])
+  );
+  
+  // Calculate length header sizes
+  const inputLengthBytes = inputBatchSizes.map(calculateLengthBytes);
+  const outputLengthBytes = outputBatchSizes.map(calculateLengthBytes);
+  
+  // Total sizes for backward compatibility and display
+  const totalInputSize = inputBufferSizes.reduce((a, b) => a + b, 0);
+  const totalOutputSize = outputBufferSizes.reduce((a, b) => a + b, 0);
 
-  const inputSizes  = Array.isArray(inputSize)  ? inputSize  : [inputSize];
-  const outputSizes = Array.isArray(outputSize) ? outputSize : [outputSize];
-
-  const totalInputSize  = inputSizes.reduce((a, b)  => a + b, 0);
-  const totalOutputSize = outputSizes.reduce((a, b) => a + b, 0);
-
+  // Size relation (for display)
   let sizeRelation;
   if (totalInputSize === 0) {
     sizeRelation = { type: 'source', description: 'Data source' };
@@ -116,14 +182,14 @@ export const parseMatlabBlock = (fileContent, fileName) => {
     sizeRelation = {
       type: 'multiply',
       factor: ratio,
-      description: `×${ratio} (${config.description || 'increases size'})`
+      description: `×${ratio.toFixed(2)} (${config.description || 'increases size'})`
     };
   } else {
     const ratio = totalInputSize / totalOutputSize;
     sizeRelation = {
       type: 'divide',
       factor: ratio,
-      description: `÷${ratio} (${config.description || 'decreases size'})`
+      description: `÷${ratio.toFixed(2)} (${config.description || 'decreases size'})`
     };
   }
 
@@ -137,10 +203,23 @@ export const parseMatlabBlock = (fileContent, fileName) => {
     code:         fileContent,
     inputs:       numInputs,
     outputs:      numOutputs,
-    inputSize,
-    outputSize,
-    inputSizes,
-    outputSizes,
+    
+    // NEW BATCH PROCESSING FIELDS
+    inputPacketSizes,      // Array: bytes per packet for each input
+    inputBatchSizes,       // Array: packets per batch for each input
+    outputPacketSizes,     // Array: bytes per packet for each output
+    outputBatchSizes,      // Array: packets per batch for each output
+    inputBufferSizes,      // Array: total buffer size (with length header) for each input
+    outputBufferSizes,     // Array: total buffer size (with length header) for each output
+    inputLengthBytes,      // Array: length header size for each input
+    outputLengthBytes,     // Array: length header size for each output
+    
+    // LEGACY FIELDS (for backward compatibility)
+    inputSize: totalInputSize,
+    outputSize: totalOutputSize,
+    inputSizes: inputBufferSizes,
+    outputSizes: outputBufferSizes,
+    
     description:  config.description || 'No description',
     config,
     color:        isGraph ? '#9333ea' : generateColor(config.name || fileName.replace('.m', '')),
