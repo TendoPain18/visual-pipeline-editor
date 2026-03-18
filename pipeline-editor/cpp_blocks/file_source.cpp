@@ -3,183 +3,282 @@
 #include <string>
 #include <fstream>
 #include <filesystem>
+#include <cstring>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
 const uint8_t START_FLAG[] = {0xAA, 0x55, 0xAA, 0x55};
-const uint8_t END_FLAG[] = {0x55, 0xAA, 0x55, 0xAA};
-const int FILENAME_LENGTH = 256;
-const int REPETITIONS = 10;
+const uint8_t END_FLAG[]   = {0x55, 0xAA, 0x55, 0xAA};
+const int FILENAME_LENGTH  = 256;
+const int REPETITIONS      = 10;
+
+// -----------------------------------------------------------------------
+// Tuning constants
+// -----------------------------------------------------------------------
+static constexpr int PACKET_SIZE      = 1500;
+static constexpr int BATCH_SIZE       = 64;
+static constexpr int BATCH_BYTES      = PACKET_SIZE * BATCH_SIZE;    // 96 000 B
+static constexpr int RING_BATCHES     = 16;
+static constexpr int RING_CAP         = RING_BATCHES * BATCH_BYTES;  // 1 536 000 B
+static constexpr int DISK_CHUNK       = 3 * BATCH_BYTES;             // 288 000 B
+static constexpr int REFILL_WHEN_FREE = DISK_CHUNK;
+
+// -----------------------------------------------------------------------
+// Ring buffer — heap-backed to avoid stack overflow
+// -----------------------------------------------------------------------
+struct RingBuf {
+    std::vector<int8_t> data;
+    int head = 0;
+    int tail = 0;
+    int used = 0;
+
+    void init(int capacity) { data.assign(capacity, 0); }
+
+    int  cap()   const { return (int)data.size(); }
+    int  avail() const { return used; }
+    int  free()  const { return cap() - used; }
+    bool empty() const { return used == 0; }
+
+    int write(const int8_t *src, int len) {
+        len = std::min(len, free());
+        if (len <= 0) return 0;
+        int first = std::min(len, cap() - tail);
+        memcpy(data.data() + tail, src, first);
+        if (len > first) memcpy(data.data(), src + first, len - first);
+        tail  = (tail + len) % cap();
+        used += len;
+        return len;
+    }
+
+    int peek(int8_t *dst, int len) const {
+        len = std::min(len, used);
+        if (len <= 0) return 0;
+        int first = std::min(len, cap() - head);
+        memcpy(dst, data.data() + head, first);
+        if (len > first) memcpy(dst + first, data.data() + head + first - cap(), len - first);
+        return len;
+    }
+
+    void consume(int len) {
+        head  = (head + len) % cap();
+        used -= len;
+    }
+};
+
+// -----------------------------------------------------------------------
+// State machine
+// -----------------------------------------------------------------------
+enum class FileState {
+    IDLE,
+    SEND_HEADER,
+    SEND_DATA,
+    SEND_FOOTER,
+    DONE
+};
 
 struct FileSourceData {
     std::vector<std::string> filePaths;
-    int currentFileIdx;
-    std::vector<uint8_t> streamBuffer;
-    std::string sourceDirectory;
+    int                      currentFileIdx = 0;
+    std::string              sourceDirectory;
+
+    FileState     fileState            = FileState::IDLE;
+    std::ifstream currentFileStream;
+    uint64_t      currentFileSize      = 0;
+    uint64_t      currentFileBytesRead = 0;
+    std::string   currentFileName;
+
+    RingBuf             ring;
+    std::vector<int8_t> diskBuf;
 };
 
-FileSourceData init_file_source(const BlockConfig& config) {
-    FileSourceData data;
-    data.sourceDirectory = "Test_Files";
-    data.currentFileIdx = 0;
-    
-    if (!fs::exists(data.sourceDirectory)) {
-        fs::create_directories(data.sourceDirectory);
-        fprintf(stderr, "Created source directory. Add files and restart.\n");
-        exit(1);
+// -----------------------------------------------------------------------
+// Header builder
+// -----------------------------------------------------------------------
+static std::vector<int8_t> build_header(const std::string &fileName, uint64_t fileSize) {
+    std::vector<int8_t> hdr;
+    hdr.reserve(4 + FILENAME_LENGTH * REPETITIONS + 8 * REPETITIONS);
+
+    for (int i = 0; i < 4; i++)
+        hdr.push_back((int8_t)((int32_t)START_FLAG[i] - 128));
+
+    for (int r = 0; r < REPETITIONS; r++) {
+        uint8_t nameBytes[FILENAME_LENGTH] = {};
+        int nameLen = std::min((int)fileName.size(), FILENAME_LENGTH);
+        memcpy(nameBytes, fileName.c_str(), nameLen);
+        for (int j = 0; j < FILENAME_LENGTH; j++)
+            hdr.push_back((int8_t)((int32_t)nameBytes[j] - 128));
     }
-    
-    for (const auto& entry : fs::directory_iterator(data.sourceDirectory)) {
-        if (entry.is_regular_file()) {
-            data.filePaths.push_back(entry.path().string());
-        }
+
+    for (int r = 0; r < REPETITIONS; r++) {
+        const uint8_t *sb = (const uint8_t *)&fileSize;
+        for (int j = 0; j < 8; j++)
+            hdr.push_back((int8_t)((int32_t)sb[j] - 128));
     }
-    
-    if (data.filePaths.empty()) {
-        fprintf(stderr, "No files found in source directory.\n");
-        exit(1);
-    }
-    
-    printf("Found %zu file(s) to send\n", data.filePaths.size());
-    
-    return data;
+
+    return hdr;
 }
 
-void process_file_source(
-    const char** pipeIn,
-    const char** pipeOut,
-    FileSourceData& customData,
-    const BlockConfig& config
-) {
-    // Create output pipe handler
-    PipeIO output(pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]);
-    
-    int packetSize = output.getPacketSize();
-    int batchSize = output.getBatchSize();
-    int totalBatchBytes = batchSize * packetSize;
-    
-    // Allocate output buffer
-    int8_t* outputBatch = new int8_t[output.getBufferSize()];
-    
-    // Fill buffer with files
-    while (customData.currentFileIdx < customData.filePaths.size() && 
-           customData.streamBuffer.size() < totalBatchBytes) {
-        
-        std::string filePath = customData.filePaths[customData.currentFileIdx];
-        std::string fileName = fs::path(filePath).filename().string();
-        
-        std::ifstream file(filePath, std::ios::binary);
-        if (!file) {
-            fprintf(stderr, "Cannot open: %s (skipping)\n", fileName.c_str());
-            customData.currentFileIdx++;
-            continue;
+// -----------------------------------------------------------------------
+// fill_ring
+// -----------------------------------------------------------------------
+static bool fill_ring(FileSourceData &d) {
+    while (d.ring.free() >= REFILL_WHEN_FREE && d.fileState != FileState::DONE) {
+
+        switch (d.fileState) {
+
+        case FileState::IDLE: {
+            if (d.currentFileIdx >= (int)d.filePaths.size()) {
+                d.fileState = FileState::DONE;
+                break;
+            }
+            const std::string &path = d.filePaths[d.currentFileIdx];
+            d.currentFileName       = fs::path(path).filename().string();
+
+            d.currentFileStream.open(path, std::ios::binary);
+            if (!d.currentFileStream) {
+                d.currentFileIdx++;
+                break;
+            }
+            d.currentFileSize      = fs::file_size(path);
+            d.currentFileBytesRead = 0;
+            d.fileState            = FileState::SEND_HEADER;
+            break;
         }
-        
-        std::vector<uint8_t> fileData((std::istreambuf_iterator<char>(file)),
-                                      std::istreambuf_iterator<char>());
-        file.close();
-        
-        int fileSize = fileData.size();
-        printf("Loading file %d/%zu: %s (%.2f KB)\n",
-               customData.currentFileIdx + 1, customData.filePaths.size(),
-               fileName.c_str(), fileSize / 1024.0);
-        
-        // Build file packet
-        std::vector<uint8_t> fileStream;
-        
-        fileStream.insert(fileStream.end(), START_FLAG, START_FLAG + 4);
-        
-        for (int rep = 0; rep < REPETITIONS; rep++) {
-            std::vector<uint8_t> nameBytes(FILENAME_LENGTH, 0);
-            int nameLen = std::min((int)fileName.length(), FILENAME_LENGTH);
-            memcpy(nameBytes.data(), fileName.c_str(), nameLen);
-            fileStream.insert(fileStream.end(), nameBytes.begin(), nameBytes.end());
+
+        case FileState::SEND_HEADER: {
+            auto hdr = build_header(d.currentFileName, d.currentFileSize);
+            d.ring.write(hdr.data(), (int)hdr.size());
+            d.fileState = FileState::SEND_DATA;
+            break;
         }
-        
-        for (int rep = 0; rep < REPETITIONS; rep++) {
-            uint64_t size64 = fileSize;
-            uint8_t* sizeBytes = (uint8_t*)&size64;
-            fileStream.insert(fileStream.end(), sizeBytes, sizeBytes + 8);
+
+        case FileState::SEND_DATA: {
+            uint64_t remaining = d.currentFileSize - d.currentFileBytesRead;
+            if (remaining == 0) {
+                d.currentFileStream.close();
+                d.fileState = FileState::SEND_FOOTER;
+                break;
+            }
+
+            int toRead = (int)std::min((uint64_t)DISK_CHUNK, remaining);
+            d.currentFileStream.read((char *)d.diskBuf.data(), toRead);
+            int got = (int)d.currentFileStream.gcount();
+
+            for (int i = 0; i < got; i++)
+                d.diskBuf[i] = (int8_t)((int32_t)(uint8_t)d.diskBuf[i] - 128);
+
+            d.ring.write(d.diskBuf.data(), got);
+            d.currentFileBytesRead += got;
+
+            if (d.currentFileBytesRead >= d.currentFileSize) {
+                d.currentFileStream.close();
+                d.fileState = FileState::SEND_FOOTER;
+            }
+            break;
         }
-        
-        fileStream.insert(fileStream.end(), fileData.begin(), fileData.end());
-        fileStream.insert(fileStream.end(), END_FLAG, END_FLAG + 4);
-        
-        customData.streamBuffer.insert(customData.streamBuffer.end(), 
-                                       fileStream.begin(), fileStream.end());
-        
-        printf("  Added to buffer: %zu bytes (total buffer: %.2f KB)\n",
-               fileStream.size(), customData.streamBuffer.size() / 1024.0);
-        
-        customData.currentFileIdx++;
-        
-        if (customData.streamBuffer.size() >= totalBatchBytes) {
+
+        case FileState::SEND_FOOTER: {
+            int8_t ef[4];
+            for (int i = 0; i < 4; i++)
+                ef[i] = (int8_t)((int32_t)END_FLAG[i] - 128);
+            d.ring.write(ef, 4);
+            d.currentFileIdx++;
+            d.fileState = FileState::IDLE;
+            break;
+        }
+
+        case FileState::DONE:
             break;
         }
     }
-    
-    // Check if done
-    if (customData.currentFileIdx >= customData.filePaths.size() && 
-        customData.streamBuffer.empty()) {
-        printf("\n========================================\n");
-        printf("TRANSMISSION COMPLETE\n");
-        printf("========================================\n");
-        printf("Total files sent: %zu\n", customData.filePaths.size());
-        printf("========================================\n");
+
+    return !(d.fileState == FileState::DONE && d.ring.empty());
+}
+
+// -----------------------------------------------------------------------
+// init
+// -----------------------------------------------------------------------
+FileSourceData init_file_source(const BlockConfig &config) {
+    FileSourceData data;
+    data.sourceDirectory = "Test_Files";
+
+    data.ring.init(RING_CAP);
+    data.diskBuf.resize(DISK_CHUNK);
+
+    if (!fs::exists(data.sourceDirectory)) {
+        fs::create_directories(data.sourceDirectory);
+        exit(1);
+    }
+
+    for (const auto &entry : fs::directory_iterator(data.sourceDirectory))
+        if (entry.is_regular_file())
+            data.filePaths.push_back(entry.path().string());
+
+    if (data.filePaths.empty())
+        exit(1);
+
+    return data;
+}
+
+// -----------------------------------------------------------------------
+// process
+// -----------------------------------------------------------------------
+void process_file_source(
+    const char ** /*pipeIn*/,
+    const char **pipeOut,
+    FileSourceData &customData,
+    const BlockConfig &config
+) {
+    PipeIO output(pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]);
+
+    bool hasData = fill_ring(customData);
+
+    if (!hasData)
         throw std::runtime_error("All files transmitted");
-    }
-    
-    // Prepare batch
-    int availableBytes = customData.streamBuffer.size();
-    int maxPacketsFromBuffer = (availableBytes + packetSize - 1) / packetSize;
-    int packetsInThisBatch = std::min(batchSize, maxPacketsFromBuffer);
-    
-    if (packetsInThisBatch == 0) {
-        delete[] outputBatch;
-        return;
-    }
-    
+
+    if (customData.ring.empty()) return;
+
+    int available   = customData.ring.avail();
+    int maxPackets  = (available + PACKET_SIZE - 1) / PACKET_SIZE;
+    int numPackets  = std::min(BATCH_SIZE, maxPackets);
+    int bytesToSend = numPackets * PACKET_SIZE;
+    if (bytesToSend > available) bytesToSend = available;
+
+    int8_t *outputBatch = new int8_t[output.getBufferSize()];
     memset(outputBatch, 0, output.getBufferSize());
-    int bytesToSend = std::min(packetsInThisBatch * packetSize, availableBytes);
-    
-    for (int i = 0; i < bytesToSend; i++) {
-        outputBatch[i] = (int8_t)((int32_t)customData.streamBuffer[i] - 128);
-    }
-    
-    customData.streamBuffer.erase(customData.streamBuffer.begin(), 
-                                   customData.streamBuffer.begin() + bytesToSend);
-    
-    printf("Sending batch (%d packets, buffer remaining: %.2f KB)\n",
-           packetsInThisBatch, customData.streamBuffer.size() / 1024.0);
-    
-    // MANUAL WRITE - Block controls when to send
-    output.write(outputBatch, packetsInThisBatch);
-    
+
+    int peeked = customData.ring.peek(outputBatch, bytesToSend);
+    customData.ring.consume(peeked);
+
+    output.write(outputBatch, numPackets);
     delete[] outputBatch;
 }
 
-int main(int argc, char* argv[]) {
+// -----------------------------------------------------------------------
+// main
+// -----------------------------------------------------------------------
+int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Usage: file_source <pipeOut>\n");
         return 1;
     }
-    
-    const char* pipeOut = argv[1];
-    
+
+    const char *pipeOut = argv[1];
+
     BlockConfig config = {
-        "FileSource",       // name
-        0,                  // inputs
-        1,                  // outputs
-        {},                 // inputPacketSizes
-        {},                 // inputBatchSizes
-        {1500},             // outputPacketSizes
-        {6000},            // outputBatchSizes
-        true,               // ltr
-        false,              // startWithAll (manual start for sources)
-        "Progressive file loading with continuous buffering"  // description
+        "FileSource",   // name
+        0,              // inputs
+        1,              // outputs
+        {},             // inputPacketSizes
+        {},             // inputBatchSizes
+        {1500},         // outputPacketSizes
+        {64},           // outputBatchSizes
+        true,           // ltr
+        false,          // startWithAll
+        "Ring-buffer streaming source"
     };
-    
+
     run_manual_block(nullptr, &pipeOut, config, process_file_source, init_file_source);
-    
     return 0;
 }

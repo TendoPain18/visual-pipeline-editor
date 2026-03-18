@@ -164,9 +164,9 @@ int main(int argc, char* argv[]) {
         3,                          // inputs
         2,                          // outputs
         {1515, 3, 3},               // inputPacketSizes  [DATA, RATE/LIP, feedback]
-        {6000, 6000, 6000},         // inputBatchSizes
+        {64, 64, 64},         // inputBatchSizes
         {1517, 3},                  // outputPacketSizes [lip+DATA(1517), SIGNAL(3)]
-        {6000, 6000},               // outputBatchSizes
+        {64, 64},               // outputBatchSizes
         false,                      // ltr (middleman)
         true,                       // startWithAll
         "Scrambler test middleman: SIGNAL first, gate on feedback, lip+DATA second"

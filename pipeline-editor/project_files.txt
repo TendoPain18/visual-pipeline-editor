@@ -1,187 +1,4 @@
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\debug.log ---
-[0208/174138.536:ERROR:crashpad_client_win.cc(868)] not connected
 
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\forge.config.js ---
-const { FusesPlugin } = require('@electron-forge/plugin-fuses');
-const { FuseV1Options, FuseVersion } = require('@electron/fuses');
-
-module.exports = {
-  packagerConfig: {
-    asar: true,
-  },
-  rebuildConfig: {},
-  makers: [
-    {
-      name: '@electron-forge/maker-squirrel',
-      config: {},
-    },
-    {
-      name: '@electron-forge/maker-zip',
-      platforms: ['darwin'],
-    },
-    {
-      name: '@electron-forge/maker-deb',
-      config: {},
-    },
-    {
-      name: '@electron-forge/maker-rpm',
-      config: {},
-    },
-  ],
-  plugins: [
-    {
-      name: '@electron-forge/plugin-vite',
-      config: {
-        build: [
-          {
-            entry: 'src/main.js',
-            config: 'vite.main.config.mjs',
-            target: 'main',
-          },
-          {
-            entry: 'src/preload.js',
-            config: 'vite.preload.config.mjs',
-            target: 'preload',
-          },
-        ],
-        renderer: [
-          {
-            name: 'main_window',
-            config: 'vite.renderer.config.mjs',
-          },
-        ],
-      },
-    },
-    new FusesPlugin({
-      version: FuseVersion.V1,
-      [FuseV1Options.RunAsNode]: false,
-      [FuseV1Options.EnableCookieEncryption]: true,
-      [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
-      [FuseV1Options.EnableNodeCliInspectArguments]: false,
-      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
-      [FuseV1Options.OnlyLoadAppFromAsar]: true,
-    }),
-  ],
-};
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\index.html ---
-<!doctype html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <title>Pipeline Editor</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/renderer.jsx"></script>
-  </body>
-</html>
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\package.json ---
-{
-  "name": "pipeline-editor",
-  "productName": "pipeline-editor",
-  "version": "1.0.0",
-  "description": "My Electron application description",
-  "main": ".vite/build/main.js",
-  "private": true,
-  "scripts": {
-    "start": "electron-forge start",
-    "package": "electron-forge package",
-    "make": "electron-forge make",
-    "publish": "electron-forge publish",
-    "lint": "echo \"No linting configured\""
-  },
-  "keywords": [],
-  "author": {
-    "name": "TendoPain18",
-    "email": "amrgadalla01@gmail.com"
-  },
-  "license": "MIT",
-  "devDependencies": {
-    "@electron-forge/cli": "^7.11.1",
-    "@electron-forge/maker-deb": "^7.11.1",
-    "@electron-forge/maker-rpm": "^7.11.1",
-    "@electron-forge/maker-squirrel": "^7.11.1",
-    "@electron-forge/maker-zip": "^7.11.1",
-    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
-    "@electron-forge/plugin-fuses": "^7.11.1",
-    "@electron-forge/plugin-vite": "^7.11.1",
-    "@electron/fuses": "^1.8.0",
-    "@tailwindcss/postcss": "^4.1.18",
-    "@vitejs/plugin-react": "^5.1.3",
-    "autoprefixer": "^10.4.24",
-    "electron": "40.1.0",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^3.4.1",
-    "vite": "^5.4.21"
-  },
-  "dependencies": {
-    "electron-squirrel-startup": "^1.0.1",
-    "lucide-react": "^0.563.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4"
-  }
-}
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\postcss.config.js ---
-export default {
-  plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
-  },
-}
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\tailwind.config.js ---
-/** @type {import('tailwindcss').Config} */
-export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-}
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\vite.main.config.mjs ---
-import { defineConfig } from 'vite';
-
-// https://vitejs.dev/config
-export default defineConfig({});
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\vite.preload.config.mjs ---
-import { defineConfig } from 'vite';
-
-// https://vitejs.dev/config
-export default defineConfig({});
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\vite.renderer.config.mjs ---
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-
-export default defineConfig({
-  plugins: [react()],
-  build: {
-    rollupOptions: {
-      input: {
-        main_window: './index.html'
-      }
-    }
-  }
-});
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\.vscode\settings.json ---
-{
-    "python-envs.defaultEnvManager": "ms-python.python:system",
-    "python-envs.pythonProjects": []
-}
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\channel_decode.cpp ---
 #include "core/run_generic_block.h"
@@ -537,7 +354,7 @@ ChannelDecodeData init_channel_decode(const BlockConfig& config) {
     data.frameCount  = 0;
     data.errorFrames = 0;
     build_trellis(data.acsTable, data.predTable);
-    data.numThreads = omp_get_max_threads();
+    data.numThreads = 64;
 
     printf("[ChannelDecode] ============================================\n");
     printf("[ChannelDecode] Viterbi Decoder initialized\n");
@@ -856,9 +673,9 @@ int main(int argc, char* argv[]) {
         2,               // inputs
         2,               // outputs
         {3027, 6},       // inputPacketSizes  [rate+lip+DATA_DEINT(3027), SIGNAL_ENC(6)]
-        {6000, 6000},    // inputBatchSizes
+        {64, 64},    // inputBatchSizes
         {1517, 3},       // outputPacketSizes [lip+DATA(1517), SIGNAL(3)]
-        {6000, 6000},    // outputBatchSizes
+        {64, 64},    // outputBatchSizes
         true,            // ltr
         true,            // startWithAll
         "Viterbi decoder: SIGNAL decoded+sent first; DATA decoded with enc_len lip from header; out[0]=lip+DATA"
@@ -1242,223 +1059,15 @@ int main(int argc, char* argv[]) {
         2,                      // inputs
         2,                      // outputs
         {1515, 3},              // inputPacketSizes  [DATA_max, RATE/LIP]
-        {6000, 6000},         // inputBatchSizes
+        {64, 64},         // inputBatchSizes
         {3030, 3},              // outputPacketSizes [ENC_DATA_max, rate_enc_len]
-        {6000, 6000},         // outputBatchSizes
+        {64, 64},         // outputBatchSizes
         true,                   // ltr
         true,                   // startWithAll
         "IEEE 802.11a convolutional encoder: SIGNAL@R=1/2, DATA@variable rate"
     };
 
     run_manual_block(pipeIns, pipeOuts, config, process_channel_encode, init_channel_encode);
-    return 0;
-}
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\channel_encode_middleman.cpp ---
-#include "core/run_generic_block.h"
-#include <cstring>
-
-// ============================================================
-// Channel Encode Middleman  (test/bypass block for channel encoder layer)
-//
-// Sits between channel_encode and channel_decode for isolated testing.
-// Will be removed once the channel encoder layer is verified.
-//
-// Inputs:
-//   in[0]: Encoded DATA from channel_encode         (3030 bytes/pkt)  <- FIRST
-//   in[1]: rate_encoded_length from channel_encode  (3 bytes/pkt)
-//             Byte 0: rate_value  (unused here; rate comes from feedback)
-//             Byte 1: enc_len_lo  <- lip for encoded domain
-//             Byte 2: enc_len_hi
-//   in[2]: Feedback from ppdu_decapsulate           (3 bytes/pkt)
-//             Byte 0: rate_value
-//             Byte 1: mac_len_lo  (unused)
-//             Byte 2: mac_len_hi  (unused)
-//
-// Outputs:
-//   out[0]: rate + lip + DATA_ENCODED -> channel_decode  (3027 bytes/pkt)  <- FIRST
-//             Byte 0: rate_value   (from feedback)
-//             Byte 1: lip_lo       (= enc_len_lo - 6, DATA portion only)
-//             Byte 2: lip_hi       (= enc_len_hi)
-//             Bytes [3..3025]: encoded DATA (3030 - 6 = 3024 bytes)
-//   out[1]: SIGNAL_ENCODED -> channel_decode             (6 bytes/pkt)
-//
-// Protocol per batch:
-//   1. Read encoded DATA        (in[0])  -- FIRST
-//   2. Read rate_encoded_length (in[1])  -- keep enc_len as lip
-//   3. Split: first 6 bytes = SIGNAL_ENCODED, rest -> out[0] bytes [3..]
-//   4. Send SIGNAL_ENCODED      (out[1]) -- SIGNAL first
-//   5. Wait for feedback        (in[2])  -- gate; extract rate_value
-//   6. Fill header [rate|lip_lo|lip_hi], send out[0]
-// ============================================================
-
-static const int DEBUG_PKT_LIMIT = 3;
-
-struct ChannelEncodeMiddlemanData {
-    int frameCount;
-};
-
-ChannelEncodeMiddlemanData init_channel_encode_middleman(const BlockConfig& config) {
-    ChannelEncodeMiddlemanData data;
-    data.frameCount = 0;
-
-    printf("[ChannelEncodeMiddleman] Staged I/O mode\n");
-    printf("[ChannelEncodeMiddleman] out[0] layout: [rate(1)|lip_lo(1)|lip_hi(1)|DATA_ENC(3024)]\n");
-    printf("[ChannelEncodeMiddleman] lip = enc_len - 6 (DATA portion, excludes SIGNAL 6B)\n");
-    printf("[ChannelEncodeMiddleman] Sequence per batch:\n");
-    printf("[ChannelEncodeMiddleman]   1. Read encoded DATA (in[0], 3030B)   -- FIRST\n");
-    printf("[ChannelEncodeMiddleman]   2. Read rate_enc_len (in[1], 3B)      -- use enc_len as lip\n");
-    printf("[ChannelEncodeMiddleman]   3. Send SIGNAL_ENC   (out[1], 6B)     -- SIGNAL first\n");
-    printf("[ChannelEncodeMiddleman]   4. Wait for feedback (in[2], 3B)      -- gate for rate\n");
-    printf("[ChannelEncodeMiddleman]   5. Send rate+lip+DATA_ENC (out[0], 3027B)\n");
-    printf("[ChannelEncodeMiddleman] Debug: first %d packets of first batch logged\n",
-           DEBUG_PKT_LIMIT);
-    printf("[ChannelEncodeMiddleman] Ready\n");
-
-    return data;
-}
-
-void process_channel_encode_middleman(
-    const char** pipeIn,
-    const char** pipeOut,
-    ChannelEncodeMiddlemanData& customData,
-    const BlockConfig& config
-) {
-    PipeIO inEncData (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);  // 3030
-    PipeIO inRateEnc (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);  // 3
-    PipeIO inFeedback(pipeIn[2],  config.inputPacketSizes[2],  config.inputBatchSizes[2]);  // 3
-    PipeIO outData   (pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]); // 3026
-    PipeIO outSignal (pipeOut[1], config.outputPacketSizes[1], config.outputBatchSizes[1]); // 6
-
-    int8_t* encDataBuf  = new int8_t[inEncData.getBufferSize()];
-    int8_t* rateEncBuf  = new int8_t[inRateEnc.getBufferSize()];
-    int8_t* feedbackBuf = new int8_t[inFeedback.getBufferSize()];
-    int8_t* signalBuf   = new int8_t[outSignal.getBufferSize()];
-    int8_t* dataOutBuf  = new int8_t[outData.getBufferSize()];
-
-    const int inEncPkt   = config.inputPacketSizes[0];   // 3030
-    const int inRatePkt  = config.inputPacketSizes[1];   // 3
-    const int inFbPkt    = config.inputPacketSizes[2];   // 3
-    const int outDataPkt = config.outputPacketSizes[0];  // 3027
-    const int outSigPkt  = config.outputPacketSizes[1];  // 6
-
-    const bool isFirstBatch = (customData.frameCount == 0);
-
-    // ===== STEP 1: Read encoded DATA batch =====
-    int actualCount = inEncData.read(encDataBuf);
-
-    // ===== STEP 2: Read rate_encoded_length -- grab enc_len as lip =====
-    inRateEnc.read(rateEncBuf);
-
-    memset(signalBuf,  0, outSignal.getBufferSize());
-    memset(dataOutBuf, 0, outData.getBufferSize());
-
-    // Store lip per packet before feedback arrives
-    int* lipArr = new int[actualCount];
-
-    // ===== STEP 3: Split SIGNAL_ENCODED (6B) and DATA_ENCODED; store lip =====
-    for (int i = 0; i < actualCount; i++) {
-        const bool dbg    = isFirstBatch && (i < DEBUG_PKT_LIMIT);
-        const int encOff  = i * inEncPkt;
-        const int rateOff = i * inRatePkt;
-        const int sigOff  = i * outSigPkt;
-        const int dataOff = i * outDataPkt;
-
-        // Grab enc_len from rate pipe (bytes 1+2); subtract 6 for SIGNAL
-        uint8_t encLo = (uint8_t)((int32_t)rateEncBuf[rateOff + 1] + 128);
-        uint8_t encHi = (uint8_t)((int32_t)rateEncBuf[rateOff + 2] + 128);
-        int encLen = (int)encLo | ((int)encHi << 8);
-        int dataLip = encLen - 6;
-        if (dataLip < 0) dataLip = 0;
-        lipArr[i] = dataLip;
-
-        // First 6 bytes = SIGNAL_ENCODED
-        memcpy(signalBuf + sigOff, encDataBuf + encOff, 6);
-
-        // Remaining bytes = DATA_ENCODED -> out[0] bytes [3..] (header TBD)
-        int copyLen = inEncPkt - 6;  // 3024
-        if (copyLen > outDataPkt - 3) copyLen = outDataPkt - 3;
-        memcpy(dataOutBuf + dataOff + 3, encDataBuf + encOff + 6, copyLen);
-
-        if (dbg) {
-            uint8_t s0 = (uint8_t)((int32_t)signalBuf[sigOff + 0] + 128);
-            uint8_t s1 = (uint8_t)((int32_t)signalBuf[sigOff + 1] + 128);
-            uint8_t s2 = (uint8_t)((int32_t)signalBuf[sigOff + 2] + 128);
-            uint8_t s3 = (uint8_t)((int32_t)signalBuf[sigOff + 3] + 128);
-            uint8_t s4 = (uint8_t)((int32_t)signalBuf[sigOff + 4] + 128);
-            uint8_t s5 = (uint8_t)((int32_t)signalBuf[sigOff + 5] + 128);
-            printf("[ChannelEncodeMiddleman] DBG pkt[%d] SIGNAL_ENC: "
-                   "%02X %02X %02X %02X %02X %02X\n",
-                   i, s0, s1, s2, s3, s4, s5);
-            printf("[ChannelEncodeMiddleman] DBG pkt[%d] enc_len=%d dataLip=%d\n",
-                   i, encLen, dataLip);
-        }
-    }
-
-    // ===== STEP 4: Send SIGNAL_ENCODED batch FIRST =====
-    outSignal.write(signalBuf, actualCount);
-
-    // ===== STEP 5: Wait for feedback (gate) -- extract rate_value =====
-    inFeedback.read(feedbackBuf);
-
-    // ===== STEP 6: Fill header [rate | lip_lo | lip_hi], send out[0] =====
-    for (int i = 0; i < actualCount; i++) {
-        const bool dbg    = isFirstBatch && (i < DEBUG_PKT_LIMIT);
-        const int fbOff   = i * inFbPkt;
-        const int dataOff = i * outDataPkt;
-
-        uint8_t rateVal = (uint8_t)((int32_t)feedbackBuf[fbOff + 0] + 128);
-        int     lip     = lipArr[i];
-
-        dataOutBuf[dataOff + 0] = (int8_t)((int32_t)rateVal             - 128);
-        dataOutBuf[dataOff + 1] = (int8_t)((int32_t)(lip & 0xFF)        - 128);
-        dataOutBuf[dataOff + 2] = (int8_t)((int32_t)((lip >> 8) & 0xFF) - 128);
-
-        if (dbg) {
-            printf("[ChannelEncodeMiddleman] DBG pkt[%d] rate=%u lip=%d -> header set\n",
-                   i, (unsigned)rateVal, lip);
-        }
-    }
-
-    outData.write(dataOutBuf, actualCount);
-
-    customData.frameCount += actualCount;
-
-    delete[] encDataBuf;
-    delete[] rateEncBuf;
-    delete[] feedbackBuf;
-    delete[] signalBuf;
-    delete[] dataOutBuf;
-    delete[] lipArr;
-}
-
-int main(int argc, char* argv[]) {
-    if (argc < 6) {
-        fprintf(stderr,
-            "Usage: channel_encode_middleman <pipeInEncData> <pipeInRateEnc> <pipeInFeedback>"
-            " <pipeOutData> <pipeOutSignal>\n");
-        return 1;
-    }
-
-    const char* pipeIns[]  = {argv[1], argv[2], argv[3]};
-    const char* pipeOuts[] = {argv[4], argv[5]};
-
-    BlockConfig config = {
-        "ChannelEncodeMiddleman",
-        3,                          // inputs
-        2,                          // outputs
-        {3030, 3, 3},               // inputPacketSizes  [ENC_DATA, rate_enc_len, feedback]
-        {6000, 6000, 6000},         // inputBatchSizes
-        {3027, 6},                  // outputPacketSizes [rate+lip+DATA_ENC(3027), SIGNAL_ENC(6)]
-        {6000, 6000},               // outputBatchSizes
-        false,                      // ltr (middleman)
-        true,                       // startWithAll
-        "Channel encoder middleman: SIGNAL_ENC first; rate+lip(enc_len-6)+DATA_ENC second"
-    };
-
-    run_manual_block(pipeIns, pipeOuts, config,
-                     process_channel_encode_middleman,
-                     init_channel_encode_middleman);
     return 0;
 }
 
@@ -1585,9 +1194,9 @@ int main(int argc, char* argv[]) {
         1,                  // inputs
         1,                  // outputs
         {1504},             // inputPacketSizes
-        {6000},            // inputBatchSizes
+        {64},            // inputBatchSizes
         {1501},             // outputPacketSizes
-        {6000},            // outputBatchSizes
+        {64},            // outputBatchSizes
         true,               // ltr
         true,               // startWithAll (AUTO-START)
         "CRC-32 decoder with error detection - batch processing"  // description
@@ -1701,9 +1310,9 @@ int main(int argc, char* argv[]) {
         1,                  // inputs
         1,                  // outputs
         {1500},             // inputPacketSizes
-        {6000},            // inputBatchSizes
+        {64},            // inputBatchSizes
         {1504},             // outputPacketSizes
-        {6000},            // outputBatchSizes
+        {64},            // outputBatchSizes
         true,               // ltr
         true,               // startWithAll (AUTO-START)
         "CRC-32 encoder (ITU-T V.42) - batch processing"  // description
@@ -1947,9 +1556,9 @@ int main(int argc, char* argv[]) {
         2,                 // inputs
         2,                 // outputs
         {3027, 6},         // inputPacketSizes  [rate+lip+DATA_INT(3027), SIGNAL_INT(6)]
-        {6000, 6000},      // inputBatchSizes
+        {64, 64},      // inputBatchSizes
         {3027, 6},         // outputPacketSizes [rate+lip+DATA_DEINT(3027), SIGNAL(6)]
-        {6000, 6000},      // outputBatchSizes
+        {64, 64},      // outputBatchSizes
         true,              // ltr
         true,              // startWithAll
         "Deinterleaver: SIGNAL deint+sent first; DATA deint up to lip bytes; rate+lip passed through"
@@ -2138,9 +1747,9 @@ int main(int argc, char* argv[]) {
         2,               // inputs
         2,               // outputs
         {1517, 3},       // inputPacketSizes  [lip+DATA(1517)@[0], SIGNAL(3)@[1]]
-        {6000, 6000},    // inputBatchSizes
+        {64, 64},    // inputBatchSizes
         {1517, 3},       // outputPacketSizes [lip+DATA(1517)@[0], SIGNAL(3)@[1]]
-        {6000, 6000},    // outputBatchSizes
+        {64, 64},    // outputBatchSizes
         true,            // ltr
         true,            // startWithAll
         "Descrambler: SIGNAL passthrough; lip from header; DATA descrambled up to lip bytes"
@@ -2506,7 +2115,7 @@ int main(int argc, char *argv[]) {
         1,                      // inputs
         0,                      // outputs
         {1501},                 // inputPacketSizes
-        {6000},                // inputBatchSizes
+        {64},                // inputBatchSizes
         {},                     // outputPacketSizes
         {},                     // outputBatchSizes
         true,                   // ltr
@@ -2694,7 +2303,7 @@ int main(int argc, char* argv[]) {
         {},                 // inputPacketSizes
         {},                 // inputBatchSizes
         {1500},             // outputPacketSizes
-        {6000},            // outputBatchSizes
+        {64},            // outputBatchSizes
         true,               // ltr
         false,              // startWithAll (manual start for sources)
         "Progressive file loading with continuous buffering"  // description
@@ -2939,9 +2548,9 @@ int main(int argc, char* argv[]) {
         2,                        // inputs
         2,                        // outputs
         {3030, 3},                // inputPacketSizes  [ENC_DATA, rate_enc_len]
-        {6000, 6000},             // inputBatchSizes
+        {64, 64},             // inputBatchSizes
         {3030, 3},                // outputPacketSizes [INTERLEAVED_DATA, rate_enc_len]
-        {6000, 6000},             // outputBatchSizes
+        {64, 64},             // outputBatchSizes
         true,                     // ltr
         true,                     // startWithAll
         "IEEE 802.11a two-step interleaver: SIGNAL=BPSK, DATA=rate-dependent, RATE passthrough"
@@ -3140,9 +2749,9 @@ int main(int argc, char* argv[]) {
         3,                          // inputs
         2,                          // outputs
         {3030, 3, 3},               // inputPacketSizes  [INT_DATA, rate_enc_len, feedback]
-        {6000, 6000, 6000},         // inputBatchSizes
+        {64, 64, 64},         // inputBatchSizes
         {3027, 6},                  // outputPacketSizes [rate+lip+DATA_INT(3027), SIGNAL_INT(6)]
-        {6000, 6000},               // outputBatchSizes
+        {64, 64},               // outputBatchSizes
         false,                      // ltr (middleman)
         true,                       // startWithAll
         "Interleaver middleman: SIGNAL_INT first; rate+lip(enc_len)+DATA_INT second"
@@ -3153,116 +2762,6 @@ int main(int argc, char* argv[]) {
                      init_interleaver_middleman);
     return 0;
 }
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\max.py ---
-import pandas as pd
-import tkinter as tk
-from tkinter import ttk
-import math
-
-# --------------------------
-# 802.11a standard rate table
-# --------------------------
-rates = [
-    {"Mbps": 6,  "Coding Rate": "1/2", "Rate_val": 1/2, "N_DBPS": 24},
-    {"Mbps": 9,  "Coding Rate": "3/4", "Rate_val": 3/4, "N_DBPS": 36},
-    {"Mbps": 12, "Coding Rate": "1/2", "Rate_val": 1/2, "N_DBPS": 48},
-    {"Mbps": 18, "Coding Rate": "3/4", "Rate_val": 3/4, "N_DBPS": 72},
-    {"Mbps": 24, "Coding Rate": "1/2", "Rate_val": 1/2, "N_DBPS": 96},
-    {"Mbps": 36, "Coding Rate": "3/4", "Rate_val": 3/4, "N_DBPS": 144},
-    {"Mbps": 48, "Coding Rate": "2/3", "Rate_val": 2/3, "N_DBPS": 192},
-    {"Mbps": 54, "Coding Rate": "3/4", "Rate_val": 3/4, "N_DBPS": 216},
-]
-
-PACKET_SIZE = 1500  # bytes
-
-def bits_to_bytes(bits):
-    return round(bits / 8, 4)
-
-# --------------------------
-# Build table
-# --------------------------
-table = []
-
-for r in rates:
-
-    CRC_BYTES = PACKET_SIZE + 4
-    L_CRC_bits = CRC_BYTES * 8
-
-    # DATA before padding
-    L_DATA_bits = 16 + L_CRC_bits + 6
-
-    N_DBPS = r["N_DBPS"]
-
-    N_SYM = math.ceil(L_DATA_bits / N_DBPS)
-
-    # AFTER padding
-    L_PPDU_bits = N_SYM * N_DBPS
-    PAD_bits = L_PPDU_bits - L_DATA_bits
-
-    L_PPDU_bytes = bits_to_bytes(L_PPDU_bits)
-
-    Encoded_bytes = round(L_PPDU_bytes / r["Rate_val"], 4)
-
-    table.append({
-        "Rate (Mbps)": r["Mbps"],
-        "Coding Rate": r["Coding Rate"],
-        "N_DBPS": N_DBPS,
-        "CRC (Bytes)": CRC_BYTES,
-        "L_PPDU (Bytes)": L_PPDU_bytes,
-        "Encoded (Bytes)": Encoded_bytes,
-        "PAD (Bits)": PAD_bits,
-        "Symbols": N_SYM
-    })
-
-df = pd.DataFrame(table)
-
-# --------------------------
-# GUI
-# --------------------------
-root = tk.Tk()
-root.title("IEEE 802.11a PPDU + Encoded Size")
-root.geometry("1050x400")
-root.configure(bg="#f0f0f0")
-
-style = ttk.Style()
-style.theme_use("clam")
-
-style.configure("Treeview",
-                background="#ffffff",
-                foreground="#000000",
-                rowheight=28,
-                fieldbackground="#ffffff",
-                font=("Helvetica", 10))
-
-style.configure("Treeview.Heading",
-                font=("Helvetica", 11, "bold"),
-                foreground="#ffffff",
-                background="#2c3e50")
-
-frame = ttk.Frame(root)
-frame.pack(fill="both", expand=True, padx=10, pady=10)
-
-tree = ttk.Treeview(frame, columns=list(df.columns), show="headings")
-tree.pack(fill="both", expand=True, side="left")
-
-scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-scrollbar.pack(side="right", fill="y")
-tree.configure(yscrollcommand=scrollbar.set)
-
-for col in df.columns:
-    tree.heading(col, text=col)
-    tree.column(col, width=130, anchor="center")
-
-for i, (_, row) in enumerate(df.iterrows()):
-    tag = "evenrow" if i % 2 == 0 else "oddrow"
-    tree.insert("", "end", values=list(row), tags=(tag,))
-
-tree.tag_configure("evenrow", background="#eaf2f8")
-tree.tag_configure("oddrow", background="#ffffff")
-
-root.mainloop()
 
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\ppdu_decapsulate.cpp ---
@@ -3439,9 +2938,9 @@ int main(int argc, char* argv[]) {
         2,               // inputs
         2,               // outputs
         {1517, 3},       // inputPacketSizes  [lip+DATA(1517)@[0], SIGNAL(3)@[1]]
-        {6000, 6000},    // inputBatchSizes
+        {64, 64},    // inputBatchSizes
         {1504, 3},       // outputPacketSizes [PSDU(1504)@[0], feedback(3)@[1]]
-        {6000, 6000},    // outputBatchSizes
+        {64, 64},    // outputBatchSizes
         true,            // ltr
         true,            // startWithAll
         "PPDU decap: SIGNAL->feedback->DATA; PSDU sliced using lip from in[0] header"
@@ -3725,9 +3224,9 @@ int main(int argc, char* argv[]) {
         1,                      // inputs
         2,                      // outputs
         {1504},                 // inputPacketSizes
-        {6000},                 // inputBatchSizes
+        {64},                 // inputBatchSizes
         {1515, 3},              // outputPacketSizes [DATA_max, RATE+LIP]
-        {6000, 6000},           // outputBatchSizes
+        {64, 64},           // outputBatchSizes
         true,                   // ltr
         true,                   // startWithAll
         "IEEE 802.11a PPDU encapsulation - dynamic lip per rate, max-size DATA pipe"
@@ -3736,1374 +3235,6 @@ int main(int argc, char* argv[]) {
     run_manual_block(&pipeIn, pipeOuts, config, process_ppdu_encapsulate, init_ppdu_encapsulate);
     return 0;
 }
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\ppdu_middleman.cpp ---
-#include "core/run_generic_block.h"
-#include <cstring>
-
-// ============================================================
-// PPDU Middleman  (test/bypass block for PPDU layer)
-//
-// Sits between ppdu_encapsulate and ppdu_decapsulate for
-// isolated testing.  Will be removed once PPDU layer is verified.
-//
-// Inputs:
-//   in[0]: DATA pipe from ppdu_encapsulate   (1515 bytes/pkt, max)  <- FIRST
-//   in[1]: RATE/LIP pipe                     (3 bytes/pkt)
-//             Byte 0: rate_value  (unused; no rate forwarded here)
-//             Byte 1: lip_lo
-//             Byte 2: lip_hi
-//   in[2]: Feedback from ppdu_decapsulate    (3 bytes/pkt)
-//
-// Outputs:
-//   out[0]: lip + DATA -> ppdu_decapsulate  (1517 bytes/pkt)  <- FIRST
-//             Byte 0: lip_lo   (from in[1])
-//             Byte 1: lip_hi   (from in[1])
-//             Bytes [2..1516]: DATA (full 1515 bytes)
-//   out[1]: SIGNAL -> ppdu_decapsulate      (3 bytes/pkt)
-//
-// Protocol per batch:
-//   1. Read DATA batch        (in[0])  -- FIRST (rate measurement)
-//   2. Read RATE/LIP batch    (in[1])  -- extract lip; discard rate
-//   3. Extract SIGNAL (first 3 bytes of each packet)
-//   4. Send SIGNAL batch      (out[1]) -- SIGNAL goes first
-//   5. Wait for feedback      (in[2])  -- gate; discard content
-//   6. Fill header [lip_lo | lip_hi], send out[0]
-// ============================================================
-
-static const int DEBUG_PKT_LIMIT = 3;
-
-struct PpduMiddlemanData {
-    int frameCount;
-};
-
-PpduMiddlemanData init_ppdu_middleman(const BlockConfig& config) {
-    PpduMiddlemanData data;
-    data.frameCount = 0;
-
-    printf("[PpduMiddleman] Staged I/O mode\n");
-    printf("[PpduMiddleman] out[0] layout: [lip_lo(1)|lip_hi(1)|DATA(1515)]\n");
-    printf("[PpduMiddleman] Sequence per batch:\n");
-    printf("[PpduMiddleman]   1. Read DATA batch    (in[0], 1515 bytes/pkt) -- FIRST\n");
-    printf("[PpduMiddleman]   2. Read RATE/LIP      (in[1], 3 bytes/pkt)   -- lip only\n");
-    printf("[PpduMiddleman]   3. Send SIGNAL batch  (out[1], 3 bytes/pkt)  -- SIGNAL first\n");
-    printf("[PpduMiddleman]   4. Wait for feedback  (in[2], 3 bytes/pkt)   -- gate\n");
-    printf("[PpduMiddleman]   5. Send lip+DATA      (out[0], 1517 bytes/pkt)-- DATA second\n");
-    printf("[PpduMiddleman] Ready\n");
-
-    return data;
-}
-
-void process_ppdu_middleman(
-    const char** pipeIn,
-    const char** pipeOut,
-    PpduMiddlemanData& customData,
-    const BlockConfig& config
-) {
-    PipeIO inData    (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);  // 1515
-    PipeIO inRate    (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);  // 3
-    PipeIO inFeedback(pipeIn[2],  config.inputPacketSizes[2],  config.inputBatchSizes[2]);  // 3
-    PipeIO outData   (pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]); // 1517
-    PipeIO outSignal (pipeOut[1], config.outputPacketSizes[1], config.outputBatchSizes[1]); // 3
-
-    int8_t* dataBuf     = new int8_t[inData.getBufferSize()];
-    int8_t* rateBuf     = new int8_t[inRate.getBufferSize()];
-    int8_t* feedbackBuf = new int8_t[inFeedback.getBufferSize()];
-    int8_t* dataOutBuf  = new int8_t[outData.getBufferSize()];
-    int8_t* signalBuf   = new int8_t[outSignal.getBufferSize()];
-
-    const int inDataPkt  = config.inputPacketSizes[0];   // 1515
-    const int inRatePkt  = config.inputPacketSizes[1];   // 3
-    const int outDataPkt = config.outputPacketSizes[0];  // 1517
-    const int outSigPkt  = config.outputPacketSizes[1];  // 3
-
-    const bool isFirstBatch = (customData.frameCount == 0);
-
-    // ===== STEP 1: Read DATA batch first (rate measurement pipe) =====
-    int actualCount = inData.read(dataBuf);
-
-    // ===== STEP 2: Read RATE/LIP batch -- extract lip, discard rate =====
-    inRate.read(rateBuf);
-
-    memset(dataOutBuf, 0, outData.getBufferSize());
-    memset(signalBuf,  0, outSignal.getBufferSize());
-
-    // Store lip per packet before feedback arrives
-    int* lipArr = new int[actualCount];
-
-    // ===== STEP 3: Extract SIGNAL (first 3B) and DATA; store lip =====
-    for (int i = 0; i < actualCount; i++) {
-        const int inOff   = i * inDataPkt;
-        const int rateOff = i * inRatePkt;
-        const int sigOff  = i * outSigPkt;
-        const int dataOff = i * outDataPkt;
-
-        // Grab lip from RATE/LIP pipe (bytes 1+2)
-        uint8_t lipLo = (uint8_t)((int32_t)rateBuf[rateOff + 1] + 128);
-        uint8_t lipHi = (uint8_t)((int32_t)rateBuf[rateOff + 2] + 128);
-        int lip = (int)lipLo | ((int)lipHi << 8);
-        lipArr[i] = lip;
-
-        // First 3 bytes = SIGNAL
-        memcpy(signalBuf + sigOff, dataBuf + inOff, 3);
-
-        // Full 1515-byte packet -> out[0] bytes [2..] (header TBD)
-        int copyLen = inDataPkt;
-        if (copyLen > outDataPkt - 2) copyLen = outDataPkt - 2;
-        memcpy(dataOutBuf + dataOff + 2, dataBuf + inOff, copyLen);
-
-        if (isFirstBatch && i < DEBUG_PKT_LIMIT) {
-            printf("[PpduMiddleman] DBG pkt[%d] lip=%d\n", i, lip);
-        }
-    }
-
-    // ===== STEP 4: Send SIGNAL batch FIRST =====
-    outSignal.write(signalBuf, actualCount);
-
-    // ===== STEP 5: Wait for feedback (gate) -- discard content =====
-    inFeedback.read(feedbackBuf);
-
-    // ===== STEP 6: Fill header [lip_lo | lip_hi], send out[0] =====
-    for (int i = 0; i < actualCount; i++) {
-        const int dataOff = i * outDataPkt;
-        int lip = lipArr[i];
-
-        dataOutBuf[dataOff + 0] = (int8_t)((int32_t)(lip & 0xFF)        - 128);
-        dataOutBuf[dataOff + 1] = (int8_t)((int32_t)((lip >> 8) & 0xFF) - 128);
-
-        if (isFirstBatch && i < DEBUG_PKT_LIMIT) {
-            printf("[PpduMiddleman] DBG pkt[%d] lip=%d -> header set\n", i, lip);
-        }
-    }
-
-    outData.write(dataOutBuf, actualCount);
-
-    customData.frameCount += actualCount;
-
-    delete[] dataBuf;
-    delete[] rateBuf;
-    delete[] feedbackBuf;
-    delete[] dataOutBuf;
-    delete[] signalBuf;
-    delete[] lipArr;
-}
-
-int main(int argc, char* argv[]) {
-    if (argc < 6) {
-        fprintf(stderr,
-            "Usage: ppdu_middleman <pipeInData> <pipeInRate> <pipeInFeedback>"
-            " <pipeOutData> <pipeOutSignal>\n");
-        return 1;
-    }
-
-    const char* pipeIns[]  = {argv[1], argv[2], argv[3]};
-    const char* pipeOuts[] = {argv[4], argv[5]};
-
-    BlockConfig config = {
-        "PpduMiddleman",
-        3,                          // inputs
-        2,                          // outputs
-        {1515, 3, 3},               // inputPacketSizes  [DATA, RATE/LIP, feedback]
-        {6000, 6000, 6000},         // inputBatchSizes
-        {1517, 3},                  // outputPacketSizes [lip+DATA(1517), SIGNAL(3)]
-        {6000, 6000},               // outputBatchSizes
-        false,                      // ltr (middleman)
-        true,                       // startWithAll
-        "PPDU test middleman: SIGNAL first, gate on feedback, lip+DATA second"
-    };
-
-    run_manual_block(pipeIns, pipeOuts, config, process_ppdu_middleman, init_ppdu_middleman);
-    return 0;
-}
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\qam_demapper.cpp ---
-#include "core/run_generic_block.h"
-#include <cstring>
-#include <cstdint>
-#include <cmath>
-#include <vector>
-
-// ============================================================
-// IEEE 802.11a QAM Demapper with OFDM Symbol Extraction
-//
-// Inputs:
-//   in[0]: OFDM symbols  (256 bytes/symbol = 64 subcarriers × 4 bytes)  <- FIRST
-//             Per subcarrier: I[2 bytes int16 LE] + Q[2 bytes int16 LE]
-//   in[1]: Feedback from ppdu_decapsulate  (3 bytes/pkt)
-//             Byte 0: rate_value
-//             Byte 1: mac_len_lo
-//             Byte 2: mac_len_hi
-//
-// Outputs:
-//   out[0]: SIGNAL bits  (6 bytes = 48 bits demapped from first OFDM symbol)  <- FIRST
-//   out[1]: rate + DATA bits  (3025 bytes/pkt)
-//             Byte 0: rate_value (from feedback)
-//             Bytes [1..]: demapped DATA bits
-//   out[2]: Scatter plot data (variable size, sent per batch)
-//             First 4 bytes: uint32 number of symbols (little-endian)
-//             Remaining: Interleaved I,Q pairs as int16 (I[0],Q[0],I[1],Q[1],...)
-//
-// Protocol (deadlock-free):
-//   1. Read SIGNAL OFDM symbol (in[0])  -- arrives FIRST
-//   2. Extract 48 data symbols (no pilots/nulls), demap BPSK -> 48 bits
-//   3. Send SIGNAL bits (out[0])        -- ppdu_decap reads, sends feedback
-//   4. Wait for feedback (in[1])        -- gate; get rate, calculate N_SYM
-//   5. Read N_SYM DATA OFDM symbols (in[0])
-//   6. Extract data symbols, demap to bits
-//   7. Send rate + DATA bits (out[1])
-//   8. If ENABLE_PLOTTING: accumulate symbols, send batch scatter plot (out[2])
-//
-// OFDM Symbol Structure (64 subcarriers, IEEE 802.11a):
-//   - 48 data subcarriers (included in scatter plot)
-//   - 4 pilot subcarriers (NOT in scatter plot)
-//   - 12 null subcarriers (NOT in scatter plot)
-// ============================================================
-
-// CONFIGURATION: Set to true to enable constellation plotting
-static const bool ENABLE_PLOTTING = false;  // <-- Change here to disable plotting
-
-struct RateModParams {
-    int    NBPSC;  // bits per subcarrier
-    int    NCBPS;  // coded bits per OFDM symbol
-    int    NDBPS;  // data bits per OFDM symbol
-    const char* modType;
-};
-
-static RateModParams getRateModParams(uint8_t rateVal) {
-    switch (rateVal) {
-        case 13: return {1,  48,  24, "BPSK"};   //  6 Mbps
-        case 15: return {1,  48,  36, "BPSK"};   //  9 Mbps
-        case  5: return {2,  96,  48, "QPSK"};   // 12 Mbps
-        case  7: return {2,  96,  72, "QPSK"};   // 18 Mbps
-        case  9: return {4, 192,  96, "16QAM"};  // 24 Mbps
-        case 11: return {4, 192, 144, "16QAM"};  // 36 Mbps
-        case  1: return {6, 288, 192, "64QAM"};  // 48 Mbps
-        case  3: return {6, 288, 216, "64QAM"};  // 54 Mbps
-        default: return {2,  96,  48, "QPSK"};   // fallback: 12 Mbps
-    }
-}
-
-// Data subcarrier indices (48 subcarriers)
-static const int DATA_SUBCARRIERS[48] = {
-    -26,-25,-24,-23,-22, -20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,
-    -6,-5,-4,-3,-2,-1, 1,2,3,4,5,6, 8,9,10,11,12,13,14,15,16,17,18,19,20,
-    22,23,24,25,26
-};
-
-// Extract 64 complex subcarriers from packed int8 format
-static void extractSubcarriers(const int8_t* ofdmSymbol, double* subcarriersI, double* subcarriersQ) {
-    for (int i = 0; i < 64; i++) {
-        int baseIdx = i * 4;
-        
-        // Convert int8 to uint8
-        uint8_t I_bytes[2], Q_bytes[2];
-        I_bytes[0] = (uint8_t)((int16_t)ofdmSymbol[baseIdx + 0] + 128);
-        I_bytes[1] = (uint8_t)((int16_t)ofdmSymbol[baseIdx + 1] + 128);
-        Q_bytes[0] = (uint8_t)((int16_t)ofdmSymbol[baseIdx + 2] + 128);
-        Q_bytes[1] = (uint8_t)((int16_t)ofdmSymbol[baseIdx + 3] + 128);
-        
-        // Reconstruct int16 values
-        int16_t I_val, Q_val;
-        memcpy(&I_val, I_bytes, 2);
-        memcpy(&Q_val, Q_bytes, 2);
-        
-        // Convert to double and descale
-        subcarriersI[i] = (double)I_val / 32767.0;
-        subcarriersQ[i] = (double)Q_val / 32767.0;
-    }
-}
-
-// Demapping functions
-static uint8_t demapBpsk(double I, double Q) {
-    return (I < 0.0) ? 0 : 1;
-}
-
-static void demapQpsk(double I, double Q, uint8_t* bits) {
-    bits[0] = (I < 0.0) ? 0 : 1;
-    bits[1] = (Q < 0.0) ? 0 : 1;
-}
-
-static void demap16Qam(double I, double Q, uint8_t* bits) {
-    const double k = 1.0 / sqrt(10.0);
-    I /= k;
-    Q /= k;
-    
-    if (I < -2.0)      bits[0] = 0, bits[1] = 0;
-    else if (I < 0.0)  bits[0] = 0, bits[1] = 1;
-    else if (I < 2.0)  bits[0] = 1, bits[1] = 1;
-    else               bits[0] = 1, bits[1] = 0;
-    
-    if (Q < -2.0)      bits[2] = 0, bits[3] = 0;
-    else if (Q < 0.0)  bits[2] = 0, bits[3] = 1;
-    else if (Q < 2.0)  bits[2] = 1, bits[3] = 1;
-    else               bits[2] = 1, bits[3] = 0;
-}
-
-static void demap64Qam(double I, double Q, uint8_t* bits) {
-    const double k = 1.0 / sqrt(42.0);
-    I /= k;
-    Q /= k;
-    
-    if (I < -6.0)      bits[0] = 0, bits[1] = 0, bits[2] = 0;
-    else if (I < -4.0) bits[0] = 0, bits[1] = 0, bits[2] = 1;
-    else if (I < -2.0) bits[0] = 0, bits[1] = 1, bits[2] = 1;
-    else if (I < 0.0)  bits[0] = 0, bits[1] = 1, bits[2] = 0;
-    else if (I < 2.0)  bits[0] = 1, bits[1] = 1, bits[2] = 0;
-    else if (I < 4.0)  bits[0] = 1, bits[1] = 1, bits[2] = 1;
-    else if (I < 6.0)  bits[0] = 1, bits[1] = 0, bits[2] = 1;
-    else               bits[0] = 1, bits[1] = 0, bits[2] = 0;
-    
-    if (Q < -6.0)      bits[3] = 0, bits[4] = 0, bits[5] = 0;
-    else if (Q < -4.0) bits[3] = 0, bits[4] = 0, bits[5] = 1;
-    else if (Q < -2.0) bits[3] = 0, bits[4] = 1, bits[5] = 1;
-    else if (Q < 0.0)  bits[3] = 0, bits[4] = 1, bits[5] = 0;
-    else if (Q < 2.0)  bits[3] = 1, bits[4] = 1, bits[5] = 0;
-    else if (Q < 4.0)  bits[3] = 1, bits[4] = 1, bits[5] = 1;
-    else if (Q < 6.0)  bits[3] = 1, bits[4] = 0, bits[5] = 1;
-    else               bits[3] = 1, bits[4] = 0, bits[5] = 0;
-}
-
-struct QamDemapperData {
-    int frameCount;
-    std::vector<int16_t> scatterI_accum;
-    std::vector<int16_t> scatterQ_accum;
-};
-
-QamDemapperData init_qam_demapper(const BlockConfig& config) {
-    QamDemapperData data;
-    data.frameCount = 0;
-    
-    printf("[QamDemapper] IEEE 802.11a QAM demapper with OFDM extraction\n");
-    printf("[QamDemapper] Protocol (deadlock-free):\n");
-    printf("[QamDemapper]   1. Read SIGNAL OFDM (in[0])  -- arrives first\n");
-    printf("[QamDemapper]   2. Send SIGNAL bits (out[0]) -- ppdu_decap unblocks\n");
-    printf("[QamDemapper]   3. Wait feedback (in[1])     -- gate; get rate, calc N_SYM\n");
-    printf("[QamDemapper]   4. Read N_SYM DATA OFDM (in[0])\n");
-    printf("[QamDemapper]   5. Send rate+DATA bits (out[1])\n");
-    if (ENABLE_PLOTTING) {
-        printf("[QamDemapper]   6. Send batch scatter plot (out[2])\n");
-        printf("[QamDemapper] Constellation plotting: ENABLED\n");
-    } else {
-        printf("[QamDemapper] Constellation plotting: DISABLED\n");
-    }
-    printf("[QamDemapper] Ready\n");
-    
-    return data;
-}
-
-void process_qam_demapper(
-    const char** pipeIn,
-    const char** pipeOut,
-    QamDemapperData& customData,
-    const BlockConfig& config
-) {
-    PipeIO inOfdm     (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);
-    PipeIO inFeedback (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);
-    PipeIO outSignal  (pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]);
-    PipeIO outData    (pipeOut[1], config.outputPacketSizes[1], config.outputBatchSizes[1]);
-    PipeIO outScatter (pipeOut[2], config.outputPacketSizes[2], config.outputBatchSizes[2]);
-    
-    int8_t* ofdmBuf     = new int8_t[256];
-    int8_t* feedbackBuf = new int8_t[inFeedback.getBufferSize()];
-    int8_t* signalBuf   = new int8_t[outSignal.getBufferSize()];
-    int8_t* dataBuf     = new int8_t[outData.getBufferSize()];
-    
-    const int inFbPkt     = config.inputPacketSizes[1];   // 3
-    const int outSigPkt   = config.outputPacketSizes[0];  // 6
-    const int outDataPkt  = config.outputPacketSizes[1];  // 3025
-    
-    // ===== STEP 1: Read SIGNAL OFDM symbol (in[0]) -- arrives first =====
-    inOfdm.read(ofdmBuf);
-    
-    // ===== STEP 2: Extract 48 data symbols, demap BPSK -> 48 bits =====
-    double subcarriersI[64], subcarriersQ[64];
-    extractSubcarriers(ofdmBuf, subcarriersI, subcarriersQ);
-    
-    uint8_t signalBits[48];
-    for (int i = 0; i < 48; i++) {
-        int sc_idx = DATA_SUBCARRIERS[i];
-        int matlab_idx = sc_idx + 32;
-        signalBits[i] = demapBpsk(subcarriersI[matlab_idx], subcarriersQ[matlab_idx]);
-    }
-    
-    // Pack to bytes
-    memset(signalBuf, 0, outSignal.getBufferSize());
-    for (int byte = 0; byte < 6; byte++) {
-        uint8_t b = 0;
-        for (int bit = 0; bit < 8; bit++) {
-            b |= (signalBits[byte * 8 + bit] << bit);  // right-MSB
-        }
-        signalBuf[byte] = (int8_t)((int16_t)b - 128);
-    }
-    
-    // ===== STEP 3: Send SIGNAL bits (out[0]) -- ppdu_decap unblocks =====
-    outSignal.write(signalBuf, 1);
-    
-    // ===== STEP 4: Wait for feedback (in[1]) -- gate =====
-    int actualCount = inFeedback.read(feedbackBuf);
-    
-    // Process each packet in the batch
-    for (int pktIdx = 0; pktIdx < actualCount; pktIdx++) {
-        const int fbOff = pktIdx * inFbPkt;
-        
-        uint8_t rateVal = (uint8_t)((int32_t)feedbackBuf[fbOff + 0] + 128);
-        uint8_t lenLo   = (uint8_t)((int32_t)feedbackBuf[fbOff + 1] + 128);
-        uint8_t lenHi   = (uint8_t)((int32_t)feedbackBuf[fbOff + 2] + 128);
-        uint16_t psduLength = (uint16_t)lenLo | ((uint16_t)lenHi << 8);
-        
-        // ===== STEP 5: Calculate N_SYM (must match mapper) =====
-        RateModParams params = getRateModParams(rateVal);
-        
-        int L_FRAMING = 1500 * 8;
-        int L_CRC     = L_FRAMING + 32;
-        int L_PPDU    = 16 + L_CRC + 6;
-        int N_DATA    = L_PPDU;
-        int N_SYM     = (N_DATA + params.NDBPS - 1) / params.NDBPS;
-        int totalDataBits = N_SYM * params.NCBPS;
-        
-        // ===== STEP 6: Read N_SYM DATA OFDM symbols =====
-        uint8_t* dataBits = new uint8_t[totalDataBits]();
-        int bitIdx = 0;
-        
-        for (int ofdmIdx = 0; ofdmIdx < N_SYM; ofdmIdx++) {
-            inOfdm.read(ofdmBuf);
-            extractSubcarriers(ofdmBuf, subcarriersI, subcarriersQ);
-            
-            // Extract and demap 48 data symbols
-            for (int i = 0; i < 48; i++) {
-                int sc_idx = DATA_SUBCARRIERS[i];
-                int matlab_idx = sc_idx + 32;
-                double I = subcarriersI[matlab_idx];
-                double Q = subcarriersQ[matlab_idx];
-                
-                uint8_t symbolBits[6];
-                if (strcmp(params.modType, "BPSK") == 0) {
-                    symbolBits[0] = demapBpsk(I, Q);
-                    if (bitIdx < totalDataBits) dataBits[bitIdx++] = symbolBits[0];
-                } else if (strcmp(params.modType, "QPSK") == 0) {
-                    demapQpsk(I, Q, symbolBits);
-                    for (int b = 0; b < 2 && bitIdx < totalDataBits; b++)
-                        dataBits[bitIdx++] = symbolBits[b];
-                } else if (strcmp(params.modType, "16QAM") == 0) {
-                    demap16Qam(I, Q, symbolBits);
-                    for (int b = 0; b < 4 && bitIdx < totalDataBits; b++)
-                        dataBits[bitIdx++] = symbolBits[b];
-                } else if (strcmp(params.modType, "64QAM") == 0) {
-                    demap64Qam(I, Q, symbolBits);
-                    for (int b = 0; b < 6 && bitIdx < totalDataBits; b++)
-                        dataBits[bitIdx++] = symbolBits[b];
-                }
-                
-                // Accumulate symbols for scatter plot (DATA symbols only)
-                if (ENABLE_PLOTTING) {
-                    int16_t I_val = (int16_t)round(I * 32767.0);
-                    int16_t Q_val = (int16_t)round(Q * 32767.0);
-                    customData.scatterI_accum.push_back(I_val);
-                    customData.scatterQ_accum.push_back(Q_val);
-                }
-            }
-        }
-        
-        // ===== STEP 7: Pack bits to bytes and send =====
-        int numDataBytes = (totalDataBits + 7) / 8;
-        uint8_t* dataBytes = new uint8_t[numDataBytes]();
-        for (int byte = 0; byte < numDataBytes; byte++) {
-            uint8_t b = 0;
-            for (int bit = 0; bit < 8; bit++) {
-                int bitPos = byte * 8 + bit;
-                if (bitPos < totalDataBits)
-                    b |= (dataBits[bitPos] << bit);  // right-MSB
-            }
-            dataBytes[byte] = b;
-        }
-        
-        const int dataOff = pktIdx * outDataPkt;
-        memset(dataBuf + dataOff, 0, outDataPkt);
-        dataBuf[dataOff + 0] = (int8_t)((int32_t)rateVal - 128);  // rate byte
-        for (int i = 0; i < numDataBytes && i < outDataPkt - 1; i++) {
-            dataBuf[dataOff + 1 + i] = (int8_t)((int32_t)dataBytes[i] - 128);
-        }
-        
-        delete[] dataBits;
-        delete[] dataBytes;
-    }
-    
-    // ===== STEP 8: Send rate+DATA bits =====
-    outData.write(dataBuf, actualCount);
-    
-    // ===== STEP 9: Send batch scatter plot (if enabled) =====
-    if (ENABLE_PLOTTING && !customData.scatterI_accum.empty()) {
-        uint32_t totalSymbols = (uint32_t)customData.scatterI_accum.size();
-        
-        // Allocate scatter buffer matching output pipe size
-        int8_t* scatterBuf = new int8_t[outScatter.getBufferSize()];
-        memset(scatterBuf, 0, outScatter.getBufferSize());
-        
-        // Write count (little-endian uint32)
-        uint8_t countBytes[4];
-        memcpy(countBytes, &totalSymbols, 4);
-        for (int i = 0; i < 4; i++) {
-            scatterBuf[i] = (int8_t)((int16_t)countBytes[i] - 128);
-        }
-        
-        // Write interleaved I/Q pairs (up to buffer limit)
-        int maxSymbols = (outScatter.getPacketSize() - 4) / 4;  // (bufferSize - header) / 4 bytes per symbol
-        int symbolsToSend = (totalSymbols < maxSymbols) ? totalSymbols : maxSymbols;
-        
-        for (int i = 0; i < symbolsToSend; i++) {
-            int16_t I_val = customData.scatterI_accum[i];
-            int16_t Q_val = customData.scatterQ_accum[i];
-            
-            uint8_t I_bytes[2], Q_bytes[2];
-            memcpy(I_bytes, &I_val, 2);
-            memcpy(Q_bytes, &Q_val, 2);
-            
-            int baseIdx = 4 + i * 4;
-            scatterBuf[baseIdx + 0] = (int8_t)((int16_t)I_bytes[0] - 128);
-            scatterBuf[baseIdx + 1] = (int8_t)((int16_t)I_bytes[1] - 128);
-            scatterBuf[baseIdx + 2] = (int8_t)((int16_t)Q_bytes[0] - 128);
-            scatterBuf[baseIdx + 3] = (int8_t)((int16_t)Q_bytes[1] - 128);
-        }
-        
-        // Send scatter data (one packet per batch)
-        outScatter.write(scatterBuf, 1);
-        
-        printf("[QamDemapper] Batch %d: Sent %d DATA symbols to scatter plot\n",
-               customData.frameCount + 1, symbolsToSend);
-        
-        delete[] scatterBuf;
-        
-        // Clear accumulation
-        customData.scatterI_accum.clear();
-        customData.scatterQ_accum.clear();
-    }
-    
-    customData.frameCount += actualCount;
-    
-    delete[] ofdmBuf;
-    delete[] feedbackBuf;
-    delete[] signalBuf;
-    delete[] dataBuf;
-}
-
-int main(int argc, char* argv[]) {
-    if (argc < 6) {
-        fprintf(stderr,
-            "Usage: qam_demapper <pipeInOfdm> <pipeInFeedback>"
-            " <pipeOutSignal> <pipeOutData> <pipeOutScatter>\n");
-        return 1;
-    }
-    
-    const char* pipeIns[]  = {argv[1], argv[2]};
-    const char* pipeOuts[] = {argv[3], argv[4], argv[5]};
-    
-    BlockConfig config = {
-        "QamDemapper",
-        2,                       // inputs
-        3,                       // outputs
-        {256, 3},                // inputPacketSizes  [OFDM_SYMBOL, feedback]
-        {6000, 6000},            // inputBatchSizes
-        {6, 3025, 50000},        // outputPacketSizes [SIGNAL, rate+DATA, scatter]
-        {6000, 6000, 1},         // outputBatchSizes  [signal batch, data batch, 1 scatter/batch]
-        false,                   // ltr (right-to-left)
-        true,                    // startWithAll
-        "IEEE 802.11a QAM demapper: OFDM -> QAM symbols -> bits, with batch scatter plot"
-    };
-    
-    run_manual_block(pipeIns, pipeOuts, config, process_qam_demapper, init_qam_demapper);
-    return 0;
-}
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\qam_demapper_no_plot.cpp ---
-#include "core/run_generic_block.h"
-#include <cstring>
-#include <cstdint>
-#include <cmath>
-
-// ============================================================
-// IEEE 802.11a QAM Demapper (no scatter plot)
-//
-// Inputs:
-//   in[0]: OFDM symbols  (256 bytes/symbol = 64 subcarriers × 4 bytes)  <- FIRST
-//             Per subcarrier: I[2 bytes int16 LE] + Q[2 bytes int16 LE], scaled by 32767
-//   in[1]: Feedback from ppdu_decapsulate  (3 bytes/pkt)
-//             Byte 0: rate_value
-//             Byte 1: mac_len_lo
-//             Byte 2: mac_len_hi
-//
-// Outputs:
-//   out[0]: SIGNAL bits  (6 bytes/pkt)                                   <- FIRST
-//             48 bits demapped from first OFDM symbol (always BPSK)
-//             Packed right-MSB (bit 0 = bit 0 of byte 0)
-//   out[1]: rate + DATA bits  (3025 bytes/pkt)
-//             Byte 0: rate_value
-//             Bytes [1..]: demapped DATA bits, packed right-MSB
-//
-// Protocol (deadlock-free):
-//   1. Read SIGNAL OFDM symbol  (in[0])  -- arrives FIRST (mapper sends it first)
-//   2. Extract 48 data symbols (skip pilots/nulls), demap BPSK -> 48 bits
-//   3. Send SIGNAL bits         (out[0]) -- ppdu_decap reads, sends feedback to us
-//   4. Read feedback            (in[1])  -- gate; extract rate, calculate N_SYM
-//   5. Read N_SYM DATA OFDM symbols (in[0]), extract data symbols, demap to bits
-//   6. Pack bits to bytes, send rate + DATA bits (out[1])
-//
-// N_SYM calculation (must match qam_mapper):
-//   L_PPDU = SERVICE_bits(16) + payload_bits(1500*8) + CRC_bits(32) + TAIL_bits(6)
-//   N_SYM  = ceil(L_PPDU / NDBPS)
-//
-// Rate -> (NBPSC, NCBPS, NDBPS):
-//   13 ->  6 Mbps: BPSK,   NBPSC=1, NCBPS=48,  NDBPS=24
-//   15 ->  9 Mbps: BPSK,   NBPSC=1, NCBPS=48,  NDBPS=36
-//    5 -> 12 Mbps: QPSK,   NBPSC=2, NCBPS=96,  NDBPS=48
-//    7 -> 18 Mbps: QPSK,   NBPSC=2, NCBPS=96,  NDBPS=72
-//    9 -> 24 Mbps: 16-QAM, NBPSC=4, NCBPS=192, NDBPS=96
-//   11 -> 36 Mbps: 16-QAM, NBPSC=4, NCBPS=192, NDBPS=144
-//    1 -> 48 Mbps: 64-QAM, NBPSC=6, NCBPS=288, NDBPS=192
-//    3 -> 54 Mbps: 64-QAM, NBPSC=6, NCBPS=288, NDBPS=216
-// ============================================================
-
-// ---- Rate parameters ----------------------------------------
-struct RateModParams {
-    int    NBPSC;
-    int    NCBPS;
-    int    NDBPS;
-    const char* modType;
-};
-
-static RateModParams getRateModParams(uint8_t rateVal) {
-    switch (rateVal) {
-        case 13: return {1,  48,  24, "BPSK"};    //  6 Mbps
-        case 15: return {1,  48,  36, "BPSK"};    //  9 Mbps
-        case  5: return {2,  96,  48, "QPSK"};    // 12 Mbps
-        case  7: return {2,  96,  72, "QPSK"};    // 18 Mbps
-        case  9: return {4, 192,  96, "16QAM"};   // 24 Mbps
-        case 11: return {4, 192, 144, "16QAM"};   // 36 Mbps
-        case  1: return {6, 288, 192, "64QAM"};   // 48 Mbps
-        case  3: return {6, 288, 216, "64QAM"};   // 54 Mbps
-        default: return {2,  96,  48, "QPSK"};    // fallback
-    }
-}
-
-// ---- Subcarrier layout --------------------------------------
-static const int DATA_SUBCARRIERS[48] = {
-    -26,-25,-24,-23,-22,
-    -20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,
-    -6,-5,-4,-3,-2,-1,
-    1,2,3,4,5,6,
-    8,9,10,11,12,13,14,15,16,17,18,19,20,
-    22,23,24,25,26
-};
-
-// ---- Extract 64 complex subcarriers from packed int8 buffer -----
-static void extractSubcarriers(const int8_t* ofdmBuf,
-                                double* subcarriersI, double* subcarriersQ) {
-    for (int i = 0; i < 64; i++) {
-        int base = i * 4;
-        uint8_t Ilo = (uint8_t)((int16_t)ofdmBuf[base + 0] + 128);
-        uint8_t Ihi = (uint8_t)((int16_t)ofdmBuf[base + 1] + 128);
-        uint8_t Qlo = (uint8_t)((int16_t)ofdmBuf[base + 2] + 128);
-        uint8_t Qhi = (uint8_t)((int16_t)ofdmBuf[base + 3] + 128);
-        int16_t I_val, Q_val;
-        uint8_t Ibuf[2] = {Ilo, Ihi};
-        uint8_t Qbuf[2] = {Qlo, Qhi};
-        memcpy(&I_val, Ibuf, 2);
-        memcpy(&Q_val, Qbuf, 2);
-        subcarriersI[i] = (double)I_val / 32767.0;
-        subcarriersQ[i] = (double)Q_val / 32767.0;
-    }
-}
-
-// ---- Hard-decision demapping functions ----------------------
-static uint8_t demapBpsk(double I) {
-    return (I >= 0.0) ? 1 : 0;
-}
-
-static void demapQpsk(double I, double Q, uint8_t* bits) {
-    bits[0] = (I >= 0.0) ? 1 : 0;
-    bits[1] = (Q >= 0.0) ? 1 : 0;
-}
-
-static void demap16Qam(double I, double Q, uint8_t* bits) {
-    const double k = 1.0 / sqrt(10.0);
-    I /= k;
-    Q /= k;
-    if      (I < -2.0) { bits[0] = 0; bits[1] = 0; }
-    else if (I <  0.0) { bits[0] = 0; bits[1] = 1; }
-    else if (I <  2.0) { bits[0] = 1; bits[1] = 1; }
-    else               { bits[0] = 1; bits[1] = 0; }
-    if      (Q < -2.0) { bits[2] = 0; bits[3] = 0; }
-    else if (Q <  0.0) { bits[2] = 0; bits[3] = 1; }
-    else if (Q <  2.0) { bits[2] = 1; bits[3] = 1; }
-    else               { bits[2] = 1; bits[3] = 0; }
-}
-
-static void demap64Qam(double I, double Q, uint8_t* bits) {
-    const double k = 1.0 / sqrt(42.0);
-    I /= k;
-    Q /= k;
-    if      (I < -6.0) { bits[0]=0; bits[1]=0; bits[2]=0; }
-    else if (I < -4.0) { bits[0]=0; bits[1]=0; bits[2]=1; }
-    else if (I < -2.0) { bits[0]=0; bits[1]=1; bits[2]=1; }
-    else if (I <  0.0) { bits[0]=0; bits[1]=1; bits[2]=0; }
-    else if (I <  2.0) { bits[0]=1; bits[1]=1; bits[2]=0; }
-    else if (I <  4.0) { bits[0]=1; bits[1]=1; bits[2]=1; }
-    else if (I <  6.0) { bits[0]=1; bits[1]=0; bits[2]=1; }
-    else               { bits[0]=1; bits[1]=0; bits[2]=0; }
-    if      (Q < -6.0) { bits[3]=0; bits[4]=0; bits[5]=0; }
-    else if (Q < -4.0) { bits[3]=0; bits[4]=0; bits[5]=1; }
-    else if (Q < -2.0) { bits[3]=0; bits[4]=1; bits[5]=1; }
-    else if (Q <  0.0) { bits[3]=0; bits[4]=1; bits[5]=0; }
-    else if (Q <  2.0) { bits[3]=1; bits[4]=1; bits[5]=0; }
-    else if (Q <  4.0) { bits[3]=1; bits[4]=1; bits[5]=1; }
-    else if (Q <  6.0) { bits[3]=1; bits[4]=0; bits[5]=1; }
-    else               { bits[3]=1; bits[4]=0; bits[5]=0; }
-}
-
-// ---- Demap one subcarrier, append bits to array -------------
-static void demapSymbol(double I, double Q, int NBPSC,
-                        uint8_t* outBits, int& bitIdx, int maxBits) {
-    uint8_t symbolBits[6];
-    if      (NBPSC == 1) { symbolBits[0] = demapBpsk(I); }
-    else if (NBPSC == 2) { demapQpsk(I, Q, symbolBits); }
-    else if (NBPSC == 4) { demap16Qam(I, Q, symbolBits); }
-    else                 { demap64Qam(I, Q, symbolBits); }
-    for (int b = 0; b < NBPSC && bitIdx < maxBits; b++) {
-        outBits[bitIdx++] = symbolBits[b];
-    }
-}
-
-// ---- State --------------------------------------------------
-struct QamDemapperNoScatterData {
-    int frameCount;
-};
-
-QamDemapperNoScatterData init_qam_demapper(const BlockConfig& config) {
-    QamDemapperNoScatterData data;
-    data.frameCount = 0;
-
-    printf("[QamDemapper] IEEE 802.11a QAM demapper (no scatter plot)\n");
-    printf("[QamDemapper] Pipeline wiring: feedback=in[0](argv[1]), OFDM=in[1](argv[2])\n");
-    printf("[QamDemapper] Protocol (deadlock-free):\n");
-    printf("[QamDemapper]   1. Read SIGNAL OFDM symbol (in[1])  -- mapper sends it first\n");
-    printf("[QamDemapper]   2. Demap BPSK -> 48 bits, pack to 6 bytes\n");
-    printf("[QamDemapper]   3. Send SIGNAL bits        (out[0]) -- ppdu_decap unblocks\n");
-    printf("[QamDemapper]   4. Read feedback            (in[0]) -- gate: rate + N_SYM\n");
-    printf("[QamDemapper]   5. Read N_SYM DATA OFDM symbols (in[1]) in one read\n");
-    printf("[QamDemapper]   6. Send rate + DATA bits   (out[1])\n");
-    printf("[QamDemapper] Ready\n");
-
-    return data;
-}
-
-void process_qam_demapper(
-    const char** pipeIn,
-    const char** pipeOut,
-    QamDemapperNoScatterData& customData,
-    const BlockConfig& config
-) {
-    // Pipeline wiring (argv order):
-    //   argv[1] = in[0] = feedback from ppdu_decapsulate (3 bytes/pkt)   -- P21
-    //   argv[2] = in[1] = OFDM symbols from qam_mapper   (256 bytes/pkt) -- P22
-    //   argv[3] = out[0] = SIGNAL bits                   (6 bytes/pkt)   -- P19
-    //   argv[4] = out[1] = rate + DATA bits               (3025 bytes/pkt)-- P20
-    //
-    // Protocol (deadlock-free, feedback-driven):
-    //   1. Read one SIGNAL OFDM symbol (in[1]) -- mapper sends SIGNAL first
-    //   2. Demap BPSK -> 48 bits, send SIGNAL bits (out[0]) -- unblocks ppdu_decap
-    //   3. Read feedback (in[0]) -- gate: get rate, compute N_SYM
-    //   4. Read N_SYM DATA OFDM symbols (in[1]) in one batch read
-    //   5. Demap, pack, send rate + DATA bits (out[1])
-    PipeIO inFeedback (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);
-    PipeIO inOfdm     (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);
-    PipeIO outSignal  (pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]);
-    PipeIO outData    (pipeOut[1], config.outputPacketSizes[1], config.outputBatchSizes[1]);
-
-    const int inFbPkt    = config.inputPacketSizes[0];   // 3
-    const int outDataPkt = config.outputPacketSizes[1];  // 3025
-
-    int8_t  signalOfdmBuf[256];
-    int8_t* feedbackBuf = new int8_t[inFeedback.getBufferSize()];
-    int8_t* signalBuf   = new int8_t[outSignal.getBufferSize()];
-    int8_t* dataBuf     = new int8_t[outData.getBufferSize()];
-
-    double subcarriersI[64], subcarriersQ[64];
-
-    const bool isFirstBatch = (customData.frameCount == 0);
-
-    // ===== STEP 1: Read SIGNAL OFDM symbol (in[0]) -- arrives first =====
-    inOfdm.read(signalOfdmBuf);
-
-    // ===== STEP 2: Extract 48 data symbols, demap BPSK -> 48 bits =====
-    extractSubcarriers(signalOfdmBuf, subcarriersI, subcarriersQ);
-
-    uint8_t signalBits[48];
-    for (int i = 0; i < 48; i++) {
-        int arr_idx  = DATA_SUBCARRIERS[i] + 32;
-        signalBits[i] = demapBpsk(subcarriersI[arr_idx]);
-    }
-
-    // Pack 48 bits to 6 bytes (right-MSB)
-    memset(signalBuf, 0, outSignal.getBufferSize());
-    for (int byte = 0; byte < 6; byte++) {
-        uint8_t b = 0;
-        for (int bit = 0; bit < 8; bit++) {
-            b |= (signalBits[byte * 8 + bit] << bit);
-        }
-        signalBuf[byte] = (int8_t)((int16_t)b - 128);
-    }
-
-    // ===== STEP 3: Send SIGNAL bits -- ppdu_decap unblocks, sends feedback =====
-    outSignal.write(signalBuf, 1);
-
-    // ===== STEP 4: Read feedback -- gate =====
-    int actualCount = inFeedback.read(feedbackBuf);
-
-    memset(dataBuf, 0, outData.getBufferSize());
-
-    // ===== STEP 5 + 6: Process each feedback packet =====
-    for (int pktIdx = 0; pktIdx < actualCount; pktIdx++) {
-        const int fbOff   = pktIdx * inFbPkt;
-        const int dataOff = pktIdx * outDataPkt;
-
-        uint8_t rateVal = (uint8_t)((int32_t)feedbackBuf[fbOff + 0] + 128);
-
-        // Calculate N_SYM (must match qam_mapper exactly)
-        RateModParams mp   = getRateModParams(rateVal);
-        const int L_PPDU   = 16 + (1500 * 8) + 32 + 6;  // 12054 bits
-        int N_SYM          = (L_PPDU + mp.NDBPS - 1) / mp.NDBPS;
-        int totalDataBits  = N_SYM * mp.NCBPS;
-
-        if (isFirstBatch && pktIdx < 3) {
-            printf("\n========================================\n");
-            printf("[QamDemapper] Frame %d\n", customData.frameCount + pktIdx + 1);
-            printf("========================================\n");
-            printf("  RATE value : %u (%s)\n", (unsigned)rateVal, mp.modType);
-            printf("  N_SYM      : %d\n", N_SYM);
-            printf("  Total bits : %d\n", totalDataBits);
-        }
-
-        // Read N_SYM DATA OFDM symbols one at a time (batchSize=1 on OFDM pipe)
-        uint8_t* dataBits = new uint8_t[totalDataBits]();
-        int bitIdx = 0;
-
-        int8_t singleOfdmBuf[256];
-        for (int symIdx = 0; symIdx < N_SYM; symIdx++) {
-            inOfdm.read(singleOfdmBuf);
-            extractSubcarriers(singleOfdmBuf, subcarriersI, subcarriersQ);
-
-            for (int i = 0; i < 48; i++) {
-                int arr_idx = DATA_SUBCARRIERS[i] + 32;
-                demapSymbol(subcarriersI[arr_idx], subcarriersQ[arr_idx],
-                            mp.NBPSC, dataBits, bitIdx, totalDataBits);
-            }
-
-            if (isFirstBatch && pktIdx == 0 && symIdx % 50 == 0) {
-                printf("  [QamDemapper] Processed DATA OFDM symbol %d/%d\n", symIdx + 1, N_SYM);
-            }
-        }
-
-        // Pack bits to bytes (right-MSB)
-        int numDataBytes = (totalDataBits + 7) / 8;
-        uint8_t* dataBytes = new uint8_t[numDataBytes]();
-        for (int byte = 0; byte < numDataBytes; byte++) {
-            uint8_t b = 0;
-            for (int bit = 0; bit < 8; bit++) {
-                int bitPos = byte * 8 + bit;
-                if (bitPos < totalDataBits) b |= (dataBits[bitPos] << bit);
-            }
-            dataBytes[byte] = b;
-        }
-
-        // Write rate byte + data bytes to output buffer
-        dataBuf[dataOff + 0] = (int8_t)((int32_t)rateVal - 128);
-        int copyLen = (numDataBytes < outDataPkt - 1) ? numDataBytes : outDataPkt - 1;
-        for (int i = 0; i < copyLen; i++) {
-            dataBuf[dataOff + 1 + i] = (int8_t)((int32_t)dataBytes[i] - 128);
-        }
-
-        if (isFirstBatch && pktIdx < 3) {
-            printf("  Demapped %d DATA symbols, packed to %d bytes\n",
-                   N_SYM * 48, numDataBytes);
-        }
-
-        delete[] dataBits;
-        delete[] dataBytes;
-    }
-
-    // ===== STEP 6: Send rate + DATA bits =====
-    outData.write(dataBuf, actualCount);
-
-    customData.frameCount += actualCount;
-
-    delete[] feedbackBuf;
-    delete[] signalBuf;
-    delete[] dataBuf;
-}
-
-int main(int argc, char* argv[]) {
-    if (argc < 5) {
-        fprintf(stderr,
-            "Usage: qam_demapper_no_scatter <pipeInOfdm> <pipeInFeedback>"
-            " <pipeOutSignal> <pipeOutData>\n");
-        return 1;
-    }
-
-    const char* pipeIns[]  = {argv[1], argv[2]};
-    const char* pipeOuts[] = {argv[3], argv[4]};
-
-    BlockConfig config = {
-        "QamDemapperNoScatter",
-        2,                       // inputs
-        2,                       // outputs
-        {3, 256},                // inputPacketSizes  [feedback(argv[1]), OFDM_SYMBOL(argv[2])]
-        {6000, 1},               // inputBatchSizes   [feedback:6000, OFDM:1 symbol at a time]
-        {6, 3025},               // outputPacketSizes [SIGNAL, rate+DATA]
-        {6000, 6000},            // outputBatchSizes
-        false,                   // ltr (right-to-left; feedback-driven)
-        true,                    // startWithAll
-        "IEEE 802.11a QAM demapper (no scatter): feedback(in[0]) + OFDM(in[1]) -> bits"
-    };
-
-    run_manual_block(pipeIns, pipeOuts, config, process_qam_demapper, init_qam_demapper);
-    return 0;
-}
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\qam_mapper.cpp ---
-#include "core/run_generic_block.h"
-#include <cstring>
-#include <cstdint>
-#include <cmath>
-
-// ============================================================
-// IEEE 802.11a QAM Mapper with OFDM Symbol Structuring
-//
-// Inputs:
-//   in[0]: Interleaved DATA  (3030 bytes/pkt, max)         <- FIRST
-//             First 6 bytes (48 bits) = SIGNAL field (always BPSK)
-//             Remaining bytes = DATA field (rate-dependent modulation)
-//   in[1]: rate_encoded_length  (3 bytes/pkt)
-//             Byte 0: rate_value
-//             Byte 1: encoded_len_lo
-//             Byte 2: encoded_len_hi
-//
-// Outputs:
-//   out[0]: OFDM symbols  (256 bytes/symbol)               <- FIRST
-//             64 subcarriers × 4 bytes per subcarrier
-//             Per subcarrier: I[2 bytes int16 LE] + Q[2 bytes int16 LE]
-//             Scaled by 32767.
-//             One SIGNAL symbol followed by N_SYM DATA symbols per frame.
-//
-// OFDM Symbol Structure (IEEE 802.11a, 64 subcarriers):
-//   - 48 data subcarriers: -26..-22, -20..-8, -6..-1, 1..6, 8..20, 22..26
-//   - 4 pilot subcarriers: -21, -7, 7, 21
-//   - 12 null subcarriers: DC (0) + 11 edge guards
-//
-// Processing per frame (1 SIGNAL OFDM symbol + N_SYM DATA OFDM symbols):
-//   1. Read interleaved DATA (in[0])  -- FIRST
-//   2. Read rate_encoded_length (in[1])
-//   3. Map first 48 bits to BPSK -> SIGNAL OFDM symbol -> write to out[0]
-//   4. For each DATA OFDM symbol (N_SYM total):
-//        map NCBPS bits with rate-dependent modulation -> write to out[0]
-//
-// N_SYM calculation (must match demapper):
-//   L_PPDU = SERVICE_bits(16) + payload_bits(1500*8) + CRC_bits(32) + TAIL_bits(6) = 12054
-//   N_SYM  = ceil(L_PPDU / NDBPS)
-//
-// Constellation maps (IEEE 802.11a Gray-coded):
-//   BPSK  : [-1, +1]
-//   QPSK  : (1/sqrt(2)) * [-1-j, -1+j, +1-j, +1+j]  (left-MSB bit index)
-//   16-QAM: Gray coded, k=1/sqrt(10)
-//   64-QAM: Gray coded, k=1/sqrt(42)
-//
-// Pilot sequence: 127-element PN sequence (cyclic), pilots are p_n * {1,1,1,-1}
-//   SIGNAL symbol uses pilot_seq[0], DATA symbols use pilot_seq[ofdmIdx % 127]
-//
-// Rate -> (NBPSC, NCBPS, NDBPS):
-//   13 ->  6 Mbps: BPSK,   NBPSC=1, NCBPS=48,  NDBPS=24
-//   15 ->  9 Mbps: BPSK,   NBPSC=1, NCBPS=48,  NDBPS=36
-//    5 -> 12 Mbps: QPSK,   NBPSC=2, NCBPS=96,  NDBPS=48
-//    7 -> 18 Mbps: QPSK,   NBPSC=2, NCBPS=96,  NDBPS=72
-//    9 -> 24 Mbps: 16-QAM, NBPSC=4, NCBPS=192, NDBPS=96
-//   11 -> 36 Mbps: 16-QAM, NBPSC=4, NCBPS=192, NDBPS=144
-//    1 -> 48 Mbps: 64-QAM, NBPSC=6, NCBPS=288, NDBPS=192
-//    3 -> 54 Mbps: 64-QAM, NBPSC=6, NCBPS=288, NDBPS=216
-// ============================================================
-
-// ---- Rate parameters ----------------------------------------
-struct RateModParams {
-    int    NBPSC;
-    int    NCBPS;
-    int    NDBPS;
-};
-
-static RateModParams getRateModParams(uint8_t rateVal) {
-    switch (rateVal) {
-        case 13: return {1,  48,  24};  //  6 Mbps BPSK
-        case 15: return {1,  48,  36};  //  9 Mbps BPSK
-        case  5: return {2,  96,  48};  // 12 Mbps QPSK
-        case  7: return {2,  96,  72};  // 18 Mbps QPSK
-        case  9: return {4, 192,  96};  // 24 Mbps 16-QAM
-        case 11: return {4, 192, 144};  // 36 Mbps 16-QAM
-        case  1: return {6, 288, 192};  // 48 Mbps 64-QAM
-        case  3: return {6, 288, 216};  // 54 Mbps 64-QAM
-        default: return {2,  96,  48};  // fallback 12 Mbps QPSK
-    }
-}
-
-// ---- Subcarrier layout -------------------------------------
-// 48 data subcarrier indices (offsets from DC, range -32..+31 in 64-pt DFT)
-static const int DATA_SUBCARRIERS[48] = {
-    -26,-25,-24,-23,-22,
-    -20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,
-    -6,-5,-4,-3,-2,-1,
-    1,2,3,4,5,6,
-    8,9,10,11,12,13,14,15,16,17,18,19,20,
-    22,23,24,25,26
-};
-
-// 4 pilot subcarrier indices
-static const int PILOT_SUBCARRIERS[4] = {-21, -7, 7, 21};
-
-// 127-element pilot PN sequence (IEEE 802.11a Table 18-7)
-static const int8_t PILOT_SEQ[127] = {
-     1, 1, 1, 1,-1,-1,-1, 1,-1,-1,-1,-1, 1, 1,-1, 1,
-    -1,-1, 1, 1,-1, 1, 1,-1, 1, 1, 1, 1, 1, 1,-1, 1,
-     1, 1,-1, 1, 1,-1, 1,-1,-1, 1, 1, 1,-1, 1,-1,-1,
-    -1, 1,-1, 1,-1,-1, 1,-1,-1, 1, 1, 1, 1, 1,-1,-1,
-     1, 1,-1,-1, 1,-1, 1,-1, 1, 1,-1,-1,-1, 1, 1,-1,
-    -1,-1,-1, 1,-1,-1, 1,-1, 1, 1, 1, 1,-1, 1,-1, 1,
-    -1, 1,-1,-1,-1,-1,-1, 1,-1, 1, 1,-1, 1,-1, 1, 1,
-     1,-1,-1, 1,-1,-1,-1,-1,-1,-1,-1
-};
-
-// ---- Constellation maps (pre-computed at init) --------------
-// Using complex represented as two doubles (I, Q).
-struct Complex { double I; double Q; };
-
-// BPSK: 2 points indexed by 1 bit (left-MSB)
-static Complex BPSK_MAP[2];
-
-// QPSK: 4 points indexed by 2 bits (left-MSB -> index 0..3)
-static Complex QPSK_MAP[4];
-
-// 16-QAM: 16 points indexed by 4 bits (left-MSB -> index 0..15)
-static Complex QAM16_MAP[16];
-
-// 64-QAM: 64 points indexed by 6 bits (left-MSB -> index 0..63)
-static Complex QAM64_MAP[64];
-
-// Gray decode tables for I axis
-// 16-QAM I (2 bits b0b1) -> I-level: 00=-3,01=-1,11=+1,10=+3
-static const int QAM16_I_LEVEL[4] = {-3, -1, 3, 1};  // indexed by b0b1 Gray
-
-// 16-QAM Q axis same mapping
-// 64-QAM I (3 bits b0b1b2) -> I-level: 000=-7,001=-5,011=-3,010=-1,110=+1,111=+3,101=+5,100=+7
-static const int QAM64_I_LEVEL[8] = {-7, -5, -3, -1, 7, 5, 3, 1};
-// Index map: 0->-7, 1->-5, 2->-1(wait, see MATLAB)
-// From MATLAB: b0b1b2 case 0=-7,1=-5,3=-3,2=-1,6=+1,7=+3,5=+5,4=+7
-// So by b0b1b2 index: [0]=-7,[1]=-5,[2]=-1,[3]=-3,[4]=+7,[5]=+5,[6]=+1,[7]=+3
-static const int QAM64_LEVEL_FROM_GRAY[8] = {-7, -5, -1, -3, 7, 5, 1, 3};
-
-static void buildConstellations() {
-    // BPSK
-    BPSK_MAP[0] = {-1.0, 0.0};
-    BPSK_MAP[1] = { 1.0, 0.0};
-
-    // QPSK: k = 1/sqrt(2)
-    // bits b0b1 (left-MSB): 00->-1-j, 01->-1+j, 10->+1-j, 11->+1+j
-    {
-        const double k = 1.0 / sqrt(2.0);
-        QPSK_MAP[0] = {-k, -k};  // 00
-        QPSK_MAP[1] = {-k,  k};  // 01
-        QPSK_MAP[2] = { k, -k};  // 10
-        QPSK_MAP[3] = { k,  k};  // 11
-    }
-
-    // 16-QAM: k = 1/sqrt(10)
-    // b0b1 -> I, b2b3 -> Q  (same Gray mapping for both axes)
-    // From MATLAB: b0b1: 0->-3, 1->-1, 3->+1, 2->+3
-    {
-        const double k = 1.0 / sqrt(10.0);
-        // I levels indexed by b0b1 (Gray): 0->-3, 1->-1, 2->+3, 3->+1
-        // Q levels indexed by b2b3 (Gray): same
-        static const int lvl[4] = {-3, -1, 3, 1}; // gray index -> level
-        for (int b = 0; b < 16; b++) {
-            int b0b1 = (b >> 2) & 0x3;
-            int b2b3 = b & 0x3;
-            QAM16_MAP[b] = {k * lvl[b0b1], k * lvl[b2b3]};
-        }
-    }
-
-    // 64-QAM: k = 1/sqrt(42)
-    // b0b1b2 -> I, b3b4b5 -> Q  (Gray coded per MATLAB)
-    {
-        const double k = 1.0 / sqrt(42.0);
-        for (int b = 0; b < 64; b++) {
-            int b012 = (b >> 3) & 0x7;
-            int b345 = b & 0x7;
-            QAM64_MAP[b] = {k * QAM64_LEVEL_FROM_GRAY[b012],
-                            k * QAM64_LEVEL_FROM_GRAY[b345]};
-        }
-    }
-}
-
-// ---- Symbol mapping helper ----------------------------------
-// Map NBPSC bits (right-MSB order within byte, bits[0]=LSB side) to complex symbol.
-// 'bits' array uses right-MSB ordering matching the interleaver output.
-// For left-MSB constellation index: reverse bit order for MSB-first lookup.
-static Complex mapBitsToSymbol(const uint8_t* bits, int NBPSC) {
-    // Build index from bits: bits[0] is right-MSB (= LSB of byte), so for
-    // left-MSB constellation index we reverse:
-    // index = bits[0]*2^(NBPSC-1) + bits[1]*2^(NBPSC-2) + ... + bits[NBPSC-1]*2^0
-    int idx = 0;
-    for (int b = 0; b < NBPSC; b++) {
-        idx = (idx << 1) | (bits[b] & 1);
-    }
-
-    switch (NBPSC) {
-        case 1: return BPSK_MAP[idx & 1];
-        case 2: return QPSK_MAP[idx & 3];
-        case 4: return QAM16_MAP[idx & 15];
-        case 6: return QAM64_MAP[idx & 63];
-        default: return {0.0, 0.0};
-    }
-}
-
-// ---- Pack complex symbol into 4 int8 bytes (I_lo, I_hi, Q_lo, Q_hi) ------
-static void packSymbol(const Complex& sym, int8_t* dst) {
-    int16_t I_val = (int16_t)round(sym.I * 32767.0);
-    int16_t Q_val = (int16_t)round(sym.Q * 32767.0);
-    uint8_t I_bytes[2], Q_bytes[2];
-    memcpy(I_bytes, &I_val, 2);
-    memcpy(Q_bytes, &Q_val, 2);
-    dst[0] = (int8_t)((int16_t)I_bytes[0] - 128);
-    dst[1] = (int8_t)((int16_t)I_bytes[1] - 128);
-    dst[2] = (int8_t)((int16_t)Q_bytes[0] - 128);
-    dst[3] = (int8_t)((int16_t)Q_bytes[1] - 128);
-}
-
-// ---- Build one 64-subcarrier OFDM symbol (256 bytes) --------
-// 'dataBits'   : pointer to NCBPS bits in right-MSB order
-// 'NBPSC'      : bits per subcarrier
-// 'pilotIdx'   : pilot sequence position (0-based, mod 127)
-static void buildOfdmSymbol(const uint8_t* dataBits, int NBPSC, int pilotIdx, int8_t* ofdmOut) {
-    // Zero all 64 subcarriers
-    Complex subcarriers[64] = {};
-
-    // Map 48 data symbols
-    for (int i = 0; i < 48; i++) {
-        Complex sym = mapBitsToSymbol(dataBits + i * NBPSC, NBPSC);
-        int sc_idx   = DATA_SUBCARRIERS[i];    // -26..+26 (no pilots/nulls)
-        int arr_idx  = sc_idx + 32;            // 0-based index into 64-array (DC = index 32)
-        subcarriers[arr_idx] = sym;
-    }
-
-    // Insert pilots: p_n = PILOT_SEQ[pilotIdx % 127] (same value for all 4 pilots)
-    double p_n = (double)PILOT_SEQ[pilotIdx % 127];
-    for (int i = 0; i < 4; i++) {
-        int arr_idx = PILOT_SUBCARRIERS[i] + 32;
-        subcarriers[arr_idx] = {p_n, 0.0};
-    }
-
-    // Pack into output buffer (64 × 4 bytes = 256 bytes)
-    for (int i = 0; i < 64; i++) {
-        packSymbol(subcarriers[i], ofdmOut + i * 4);
-    }
-}
-
-// ---- State --------------------------------------------------
-struct QamMapperData {
-    int frameCount;
-    int totalOfdmSymbols;
-};
-
-QamMapperData init_qam_mapper(const BlockConfig& config) {
-    buildConstellations();
-
-    QamMapperData data;
-    data.frameCount       = 0;
-    data.totalOfdmSymbols = 0;
-
-    printf("[QamMapper] IEEE 802.11a QAM mapper with OFDM symbol structuring\n");
-    printf("[QamMapper] Output: 256 bytes/symbol (64 subcarriers × 4 bytes)\n");
-    printf("[QamMapper] SIGNAL: 1 symbol (BPSK, 48 bits from first 6 bytes of input)\n");
-    printf("[QamMapper] DATA:   N_SYM symbols (rate-dependent modulation)\n");
-    printf("[QamMapper] Pilot PN sequence: 127-element (cyclic)\n");
-    printf("[QamMapper] Protocol:\n");
-    printf("[QamMapper]   1. Read interleaved DATA (in[0]) -- FIRST\n");
-    printf("[QamMapper]   2. Read rate_encoded_length (in[1])\n");
-    printf("[QamMapper]   3. Send SIGNAL OFDM symbol (out[0])\n");
-    printf("[QamMapper]   4. Send N_SYM DATA OFDM symbols (out[0])\n");
-    printf("[QamMapper] Ready\n");
-
-    return data;
-}
-
-void process_qam_mapper(
-    const char** pipeIn,
-    const char** pipeOut,
-    QamMapperData& customData,
-    const BlockConfig& config
-) {
-    // Pipeline wiring (argv order from blockUtils topological sort):
-    //   argv[1] = in[0] = rate_encoded_length pipe (3 bytes/pkt)   -- P18
-    //   argv[2] = in[1] = Interleaved DATA pipe    (3030 bytes/pkt) -- P17
-    //   argv[3] = out[0] = OFDM symbols            (256 bytes/sym)  -- P21
-    //
-    // Each input frame produces (1 + N_SYM) OFDM symbols.
-    // All OFDM symbols for the frame are collected into a single heap buffer
-    // and sent with one write() call to avoid calling write() thousands of times.
-    PipeIO inRate  (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);
-    PipeIO inData  (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);
-    PipeIO outOfdm (pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]);
-
-    const int inRatePkt = config.inputPacketSizes[0];  // 3
-    const int inDataPkt = config.inputPacketSizes[1];  // 3030
-
-    int8_t* rateBuf = new int8_t[inRate.getBufferSize()];
-    int8_t* dataBuf = new int8_t[inData.getBufferSize()];
-
-    const bool isFirstBatch = (customData.frameCount == 0);
-
-    // ===== STEP 1: Read rate_encoded_length batch -- FIRST (matches in[0]) =====
-    int actualCount = inRate.read(rateBuf);
-
-    // ===== STEP 2: Read interleaved DATA batch =====
-    inData.read(dataBuf);
-
-    // ===== STEP 3 + 4: Process each frame in the batch =====
-    for (int pktIdx = 0; pktIdx < actualCount; pktIdx++) {
-        const int dataOff = pktIdx * inDataPkt;
-        const int rateOff = pktIdx * inRatePkt;
-
-        // Extract rate and encoded length
-        uint8_t rateVal   = (uint8_t)((int32_t)rateBuf[rateOff + 0] + 128);
-        uint8_t encLenLo  = (uint8_t)((int32_t)rateBuf[rateOff + 1] + 128);
-        uint8_t encLenHi  = (uint8_t)((int32_t)rateBuf[rateOff + 2] + 128);
-        int encodedLength = (int)encLenLo | ((int)encLenHi << 8);
-        if (encodedLength > inDataPkt) encodedLength = inDataPkt;
-
-        // Convert meaningful bytes to uint8 and expand to bits (right-MSB)
-        int numBits = encodedLength * 8;
-        uint8_t* inputBits = new uint8_t[numBits]();
-        for (int b = 0; b < encodedLength; b++) {
-            uint8_t byteVal = (uint8_t)((int32_t)dataBuf[dataOff + b] + 128);
-            for (int bit = 0; bit < 8; bit++) {
-                inputBits[b * 8 + bit] = (byteVal >> bit) & 1;  // right-MSB
-            }
-        }
-
-        // Get DATA rate params
-        RateModParams mp = getRateModParams(rateVal);
-
-        // N_SYM calculation (must match demapper)
-        const int L_PPDU    = 16 + (1500 * 8) + 32 + 6;  // 12054 bits
-        int N_SYM           = (L_PPDU + mp.NDBPS - 1) / mp.NDBPS;
-        int totalBitsNeeded = N_SYM * mp.NCBPS;
-        int totalSymbols    = 1 + N_SYM;  // 1 SIGNAL + N_SYM DATA
-
-        if (isFirstBatch && pktIdx < 3) {
-            printf("\n========================================\n");
-            printf("[QamMapper] Frame %d\n", customData.frameCount + pktIdx + 1);
-            printf("========================================\n");
-            printf("  RATE value    : %u\n", (unsigned)rateVal);
-            printf("  Encoded length: %d bytes (%d bits)\n", encodedLength, numBits);
-            printf("  Modulation    : NBPSC=%d, NCBPS=%d, NDBPS=%d\n",
-                   mp.NBPSC, mp.NCBPS, mp.NDBPS);
-            printf("  N_SYM         : %d (+ 1 SIGNAL = %d total symbols)\n",
-                   N_SYM, totalSymbols);
-            printf("  Bits needed   : %d\n", totalBitsNeeded);
-        }
-
-        // Allocate output buffer for all OFDM symbols of this frame
-        // (1 SIGNAL + N_SYM DATA) * 256 bytes each
-        int8_t* frameBuf = new int8_t[totalSymbols * 256]();
-
-        // ---- SIGNAL OFDM symbol (48 bits, always BPSK) ----
-        uint8_t signalBits[48] = {};
-        if (numBits >= 48) {
-            memcpy(signalBits, inputBits, 48);
-        } else {
-            memcpy(signalBits, inputBits, numBits);
-        }
-        buildOfdmSymbol(signalBits, 1, 0, frameBuf + 0);  // pilotIdx=0 for SIGNAL
-
-        if (isFirstBatch && pktIdx < 3) {
-            printf("  Built SIGNAL OFDM symbol (BPSK)\n");
-        }
-
-        // ---- DATA OFDM symbols (N_SYM symbols) ----
-        int availDataBits = numBits - 48;
-        if (availDataBits < 0) availDataBits = 0;
-
-        uint8_t* dataBitsAll = new uint8_t[totalBitsNeeded]();
-        int copyLen = (availDataBits < totalBitsNeeded) ? availDataBits : totalBitsNeeded;
-        if (copyLen > 0) {
-            memcpy(dataBitsAll, inputBits + 48, copyLen);
-        }
-
-        for (int symIdx = 0; symIdx < N_SYM; symIdx++) {
-            int startBit = symIdx * mp.NCBPS;
-            int pilotIdx = symIdx + 1;  // SIGNAL uses 0, DATA starts at 1
-            buildOfdmSymbol(dataBitsAll + startBit, mp.NBPSC, pilotIdx,
-                            frameBuf + (1 + symIdx) * 256);
-        }
-
-        if (isFirstBatch && pktIdx < 3) {
-            printf("  Built %d DATA OFDM symbols (%s)\n", N_SYM,
-                   (mp.NBPSC == 1) ? "BPSK" :
-                   (mp.NBPSC == 2) ? "QPSK" :
-                   (mp.NBPSC == 4) ? "16QAM" : "64QAM");
-            printf("  Sending %d OFDM symbols in one write call\n", totalSymbols);
-        }
-
-        // Single write of all OFDM symbols for this frame, one at a time
-        // (PipeIO batchSize=1, so each write() call sends exactly 256 bytes)
-        for (int s = 0; s < totalSymbols; s++) {
-            outOfdm.write(frameBuf + s * 256, 1);
-        }
-        customData.totalOfdmSymbols += totalSymbols;
-
-        delete[] inputBits;
-        delete[] dataBitsAll;
-        delete[] frameBuf;
-    }
-
-    customData.frameCount += actualCount;
-
-    delete[] dataBuf;
-    delete[] rateBuf;
-}
-
-int main(int argc, char* argv[]) {
-    if (argc < 4) {
-        fprintf(stderr,
-            "Usage: qam_mapper <pipeInRate> <pipeInData> <pipeOutOfdm>\n");
-        return 1;
-    }
-
-    const char* pipeIns[]  = {argv[1], argv[2]};  // [0]=rate(3B), [1]=data(3030B)
-    const char* pipeOut    = argv[3];
-
-    BlockConfig config = {
-        "QamMapper",
-        2,                       // inputs
-        1,                       // outputs
-        {3, 3030},               // inputPacketSizes  [rate_enc_len(argv[1]), INT_DATA(argv[2])]
-        {6000, 6000},            // inputBatchSizes
-        {256},                   // outputPacketSizes [OFDM_SYMBOL]
-        {1},                     // outputBatchSizes  -- write 1 symbol at a time
-        false,                    // ltr
-        true,                    // startWithAll
-        "IEEE 802.11a QAM mapper: rate(in[0]) + data(in[1]) -> OFDM symbols (SIGNAL + N_SYM DATA)"
-    };
-
-    run_manual_block(pipeIns, &pipeOut, config, process_qam_mapper, init_qam_mapper);
-    return 0;
-}
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\rate_config.txt ---
-9
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\scrambler.cpp ---
 #include "core/run_generic_block.h"
@@ -5277,9 +3408,9 @@ int main(int argc, char* argv[]) {
         2,                       // inputs
         2,                       // outputs
         {1515, 3},               // inputPacketSizes  [DATA_max, RATE/LIP]
-        {6000, 6000},          // inputBatchSizes
+        {64, 64},          // inputBatchSizes
         {1515, 3},               // outputPacketSizes [DATA_max, RATE/LIP]
-        {6000, 6000},          // outputBatchSizes
+        {64, 64},          // outputBatchSizes
         true,                    // ltr
         true,                    // startWithAll
         "Scrambler: SIGNAL passthrough, DATA scrambled up to lip bytes, RATE/LIP passthrough"
@@ -5290,188 +3421,8 @@ int main(int argc, char* argv[]) {
 }
 
 
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\scrambler_middleman.cpp ---
-#include "core/run_generic_block.h"
-#include <cstring>
-
-// ============================================================
-// Scrambler Middleman  (test/bypass block for scrambler layer)
-//
-// Sits between scrambler and descrambler for isolated testing.
-// Will be removed once the scrambler layer is verified.
-//
-// Inputs:
-//   in[0]: DATA pipe from scrambler   (1515 bytes/pkt, max)  <- FIRST
-//   in[1]: RATE/LIP pipe              (3 bytes/pkt)
-//             Byte 0: rate_value  (unused; no rate forwarded here)
-//             Byte 1: lip_lo
-//             Byte 2: lip_hi
-//   in[2]: Feedback from ppdu_decap   (3 bytes/pkt)
-//
-// Outputs:
-//   out[0]: lip + DATA -> descrambler  (1518 bytes/pkt)  <- FIRST
-//             Byte 0: lip_lo   (from in[1])
-//             Byte 1: lip_hi   (from in[1])
-//             Bytes [2..1516]: DATA (full 1515 bytes)
-//   out[1]: SIGNAL -> descrambler      (3 bytes/pkt)
-//
-// Protocol per batch:
-//   1. Read DATA batch      (in[0])  -- FIRST (rate measurement)
-//   2. Read RATE/LIP batch  (in[1])  -- extract lip; discard rate
-//   3. Extract SIGNAL (first 3 bytes of each packet)
-//   4. Send SIGNAL batch    (out[1]) -- SIGNAL goes FIRST
-//   5. Wait for feedback    (in[2])  -- gate; discard content
-//   6. Fill header [lip_lo | lip_hi], send out[0]
-// ============================================================
-
-static const int DEBUG_PKT_LIMIT = 3;
-
-struct ScramblerMiddlemanData {
-    int frameCount;
-};
-
-ScramblerMiddlemanData init_scrambler_middleman(const BlockConfig& config) {
-    ScramblerMiddlemanData data;
-    data.frameCount = 0;
-
-    printf("[ScramblerMiddleman] Staged I/O mode\n");
-    printf("[ScramblerMiddleman] out[0] layout: [lip_lo(1)|lip_hi(1)|DATA(1515)]\n");
-    printf("[ScramblerMiddleman] Sequence per batch:\n");
-    printf("[ScramblerMiddleman]   1. Read DATA batch    (in[0], 1515 bytes/pkt) -- FIRST\n");
-    printf("[ScramblerMiddleman]   2. Read RATE/LIP      (in[1], 3 bytes/pkt)   -- lip only\n");
-    printf("[ScramblerMiddleman]   3. Send SIGNAL batch  (out[1], 3 bytes/pkt)  -- SIGNAL first\n");
-    printf("[ScramblerMiddleman]   4. Wait for feedback  (in[2], 3 bytes/pkt)   -- gate\n");
-    printf("[ScramblerMiddleman]   5. Send lip+DATA      (out[0], 1517 bytes/pkt)-- DATA second\n");
-    printf("[ScramblerMiddleman] Ready\n");
-
-    return data;
-}
-
-void process_scrambler_middleman(
-    const char** pipeIn,
-    const char** pipeOut,
-    ScramblerMiddlemanData& customData,
-    const BlockConfig& config
-) {
-    PipeIO inData    (pipeIn[0],  config.inputPacketSizes[0],  config.inputBatchSizes[0]);  // 1515
-    PipeIO inRate    (pipeIn[1],  config.inputPacketSizes[1],  config.inputBatchSizes[1]);  // 3
-    PipeIO inFeedback(pipeIn[2],  config.inputPacketSizes[2],  config.inputBatchSizes[2]);  // 3
-    PipeIO outData   (pipeOut[0], config.outputPacketSizes[0], config.outputBatchSizes[0]); // 1517
-    PipeIO outSignal (pipeOut[1], config.outputPacketSizes[1], config.outputBatchSizes[1]); // 3
-
-    int8_t* dataBuf     = new int8_t[inData.getBufferSize()];
-    int8_t* rateBuf     = new int8_t[inRate.getBufferSize()];
-    int8_t* feedbackBuf = new int8_t[inFeedback.getBufferSize()];
-    int8_t* dataOutBuf  = new int8_t[outData.getBufferSize()];
-    int8_t* signalBuf   = new int8_t[outSignal.getBufferSize()];
-
-    const int inDataPkt  = config.inputPacketSizes[0];   // 1515
-    const int inRatePkt  = config.inputPacketSizes[1];   // 3
-    const int outDataPkt = config.outputPacketSizes[0];  // 1517
-    const int outSigPkt  = config.outputPacketSizes[1];  // 3
-
-    const bool isFirstBatch = (customData.frameCount == 0);
-
-    // ===== STEP 1: Read DATA batch first (rate measurement) =====
-    int actualCount = inData.read(dataBuf);
-
-    // ===== STEP 2: Read RATE/LIP batch -- extract lip, discard rate =====
-    inRate.read(rateBuf);
-
-    memset(dataOutBuf, 0, outData.getBufferSize());
-    memset(signalBuf,  0, outSignal.getBufferSize());
-
-    // Store lip per packet before feedback arrives
-    int* lipArr = new int[actualCount];
-
-    // ===== STEP 3: Extract SIGNAL (first 3B) and DATA; store lip =====
-    for (int i = 0; i < actualCount; i++) {
-        const int inOff   = i * inDataPkt;
-        const int rateOff = i * inRatePkt;
-        const int sigOff  = i * outSigPkt;
-        const int dataOff = i * outDataPkt;
-
-        // Grab lip from RATE/LIP pipe (bytes 1+2)
-        uint8_t lipLo = (uint8_t)((int32_t)rateBuf[rateOff + 1] + 128);
-        uint8_t lipHi = (uint8_t)((int32_t)rateBuf[rateOff + 2] + 128);
-        int lip = (int)lipLo | ((int)lipHi << 8);
-        lipArr[i] = lip;
-
-        // First 3 bytes = SIGNAL
-        memcpy(signalBuf + sigOff, dataBuf + inOff, 3);
-
-        // Full 1515-byte packet -> out[0] bytes [2..] (header TBD)
-        int copyLen = inDataPkt;
-        if (copyLen > outDataPkt - 2) copyLen = outDataPkt - 2;
-        memcpy(dataOutBuf + dataOff + 2, dataBuf + inOff, copyLen);
-
-        if (isFirstBatch && i < DEBUG_PKT_LIMIT) {
-            printf("[ScramblerMiddleman] DBG pkt[%d] lip=%d\n", i, lip);
-        }
-    }
-
-    // ===== STEP 4: Send SIGNAL batch FIRST =====
-    outSignal.write(signalBuf, actualCount);
-
-    // ===== STEP 5: Wait for feedback (gate) -- discard content =====
-    inFeedback.read(feedbackBuf);
-
-    // ===== STEP 6: Fill header [lip_lo | lip_hi], send out[0] =====
-    for (int i = 0; i < actualCount; i++) {
-        const int dataOff = i * outDataPkt;
-        int lip = lipArr[i];
-
-        dataOutBuf[dataOff + 0] = (int8_t)((int32_t)(lip & 0xFF)        - 128);
-        dataOutBuf[dataOff + 1] = (int8_t)((int32_t)((lip >> 8) & 0xFF) - 128);
-
-        if (isFirstBatch && i < DEBUG_PKT_LIMIT) {
-            printf("[ScramblerMiddleman] DBG pkt[%d] lip=%d -> header set\n", i, lip);
-        }
-    }
-
-    outData.write(dataOutBuf, actualCount);
-
-    customData.frameCount += actualCount;
-
-    delete[] dataBuf;
-    delete[] rateBuf;
-    delete[] feedbackBuf;
-    delete[] dataOutBuf;
-    delete[] signalBuf;
-    delete[] lipArr;
-}
-
-int main(int argc, char* argv[]) {
-    if (argc < 6) {
-        fprintf(stderr,
-            "Usage: scrambler_middleman <pipeInData> <pipeInRate> <pipeInFeedback>"
-            " <pipeOutData> <pipeOutSignal>\n");
-        return 1;
-    }
-
-    const char* pipeIns[]  = {argv[1], argv[2], argv[3]};
-    const char* pipeOuts[] = {argv[4], argv[5]};
-
-    BlockConfig config = {
-        "ScramblerMiddleman",
-        3,                          // inputs
-        2,                          // outputs
-        {1515, 3, 3},               // inputPacketSizes  [DATA, RATE/LIP, feedback]
-        {6000, 6000, 6000},         // inputBatchSizes
-        {1517, 3},                  // outputPacketSizes [lip+DATA(1517), SIGNAL(3)]
-        {6000, 6000},               // outputBatchSizes
-        false,                      // ltr (middleman)
-        true,                       // startWithAll
-        "Scrambler test middleman: SIGNAL first, gate on feedback, lip+DATA second"
-    };
-
-    run_manual_block(pipeIns, pipeOuts, config,
-                     process_scrambler_middleman, init_scrambler_middleman);
-    return 0;
-}
-
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\bin\rate_config.txt ---
-6
+54
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\cpp_blocks\core\cpp_socket_client.h ---
 #ifndef CPP_SOCKET_CLIENT_H
@@ -5662,143 +3613,271 @@ struct BlockConfig {
     const char* description;
 };
 
-// Calculate length bytes needed for batch count
+// ============================================================================
+// PIPE READ / WRITE OPTIONS
+// ============================================================================
+
+/**
+ * Read options passed to readBatch() / PipeIO::read().
+ *
+ * timeoutMs:
+ *   PIPE_WAIT_INFINITE (default) – block forever until data arrives (old behaviour).
+ *   Any positive value            – wait at most N milliseconds.
+ *                                   On timeout, returns PIPE_RESULT_TIMEOUT (-1).
+ *
+ * Example:
+ *   PipeReadOptions opts;
+ *   opts.timeoutMs = 5000;   // wait up to 5 s
+ *   int n = input.read(buf, opts);
+ *   if (n == PIPE_RESULT_TIMEOUT) { ... }
+ */
+static const DWORD PIPE_WAIT_INFINITE = INFINITE;
+
+struct PipeReadOptions {
+    DWORD timeoutMs = PIPE_WAIT_INFINITE;   // INFINITE or milliseconds
+};
+
+/** Returned by read() when the wait times out (timeoutMs is not INFINITE). */
+static const int PIPE_RESULT_TIMEOUT = -1;
+
+/**
+ * Write options passed to writeBatch() / PipeIO::write().
+ *
+ * overwrite:
+ *   false (default) – wait until the consumer has read the previous batch
+ *                     before writing (old behaviour, no data loss).
+ *   true            – do NOT wait; immediately overwrite whatever is in the
+ *                     shared buffer, then signal "ready" so the consumer sees
+ *                     the latest data. Use for real-time / best-effort streams
+ *                     where dropping stale frames is acceptable.
+ *
+ * Example:
+ *   PipeWriteOptions opts;
+ *   opts.overwrite = true;
+ *   output.write(buf, count, opts);
+ */
+struct PipeWriteOptions {
+    bool overwrite = false;   // true = overwrite without waiting for consumer
+};
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
 inline int calculateLengthBytes(int maxCount) {
-    if (maxCount <= 255) return 1;
-    if (maxCount <= 65535) return 2;
+    if (maxCount <= 255)      return 1;
+    if (maxCount <= 65535)    return 2;
     if (maxCount <= 16777215) return 3;
     return 4;
 }
 
-// Calculate total buffer size
 inline int calculateBufferSize(int packetSize, int batchSize) {
     int lengthBytes = calculateLengthBytes(batchSize);
     return lengthBytes + (packetSize * batchSize);
 }
 
-// Low-level pipe read
-inline int readBatch(const char* pipeName, int8_t* batchData, int lengthBytes, int totalSize) {
-    std::string instanceId = getEnvString("INSTANCE_ID", "");
+// ============================================================================
+// LOW-LEVEL readBatch
+// ============================================================================
+
+/**
+ * Returns the number of packets read, or PIPE_RESULT_TIMEOUT on timeout.
+ */
+inline int readBatch(const char*        pipeName,
+                     int8_t*            batchData,
+                     int                lengthBytes,
+                     int                totalSize,
+                     const PipeReadOptions& opts = PipeReadOptions{})
+{
+    std::string instanceId  = getEnvString("INSTANCE_ID", "");
     std::string fullPipeName = "Instance_" + instanceId + "_" + std::string(pipeName);
-    
+
     char readyName[256], emptyName[256];
     sprintf(readyName, "%s_Ready", fullPipeName.c_str());
     sprintf(emptyName, "%s_Empty", fullPipeName.c_str());
-    
+
     HANDLE hMapFile = OpenFileMappingA(FILE_MAP_READ, FALSE, fullPipeName.c_str());
     if (!hMapFile) {
         fprintf(stderr, "[PIPE] Failed to open %s: %lu\n", fullPipeName.c_str(), GetLastError());
         return 0;
     }
-    
+
     void* pBuf = MapViewOfFile(hMapFile, FILE_MAP_READ, 0, 0, totalSize);
     if (!pBuf) {
         CloseHandle(hMapFile);
         return 0;
     }
-    
+
     HANDLE hReady = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, readyName);
-    HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE, FALSE, emptyName);
-    
-    WaitForSingleObject(hReady, INFINITE);
-    
-    uint8_t* buffer = (uint8_t*)pBuf;
+    HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE,               FALSE, emptyName);
+
+    // ── Wait for data (configurable timeout) ─────────────────────────────────
+    DWORD waitResult = WaitForSingleObject(hReady, opts.timeoutMs);
+
     int actualCount = 0;
-    for (int i = 0; i < lengthBytes; i++) {
-        actualCount |= buffer[i] << (i * 8);
+
+    if (waitResult == WAIT_OBJECT_0) {
+        // Data is available – copy it out
+        uint8_t* buffer = (uint8_t*)pBuf;
+        for (int i = 0; i < lengthBytes; i++) {
+            actualCount |= buffer[i] << (i * 8);
+        }
+        memcpy(batchData, buffer + lengthBytes, totalSize - lengthBytes);
+        SetEvent(hEmpty);
+    } else {
+        // WAIT_TIMEOUT or WAIT_FAILED
+        actualCount = PIPE_RESULT_TIMEOUT;
     }
-    
-    memcpy(batchData, buffer + lengthBytes, totalSize - lengthBytes);
-    
-    SetEvent(hEmpty);
-    
+
     UnmapViewOfFile(pBuf);
     CloseHandle(hMapFile);
-    CloseHandle(hReady);
-    CloseHandle(hEmpty);
-    
+    if (hReady) CloseHandle(hReady);
+    if (hEmpty) CloseHandle(hEmpty);
+
     return actualCount;
 }
 
-// Low-level pipe write
-inline void writeBatch(const char* pipeName, int8_t* batchData, int actualCount, int lengthBytes, int totalSize) {
-    std::string instanceId = getEnvString("INSTANCE_ID", "");
+// ============================================================================
+// LOW-LEVEL writeBatch
+// ============================================================================
+
+inline void writeBatch(const char*         pipeName,
+                       int8_t*             batchData,
+                       int                 actualCount,
+                       int                 lengthBytes,
+                       int                 totalSize,
+                       const PipeWriteOptions& opts = PipeWriteOptions{})
+{
+    std::string instanceId   = getEnvString("INSTANCE_ID", "");
     std::string fullPipeName = "Instance_" + instanceId + "_" + std::string(pipeName);
-    
+
     char readyName[256], emptyName[256];
     sprintf(readyName, "%s_Ready", fullPipeName.c_str());
     sprintf(emptyName, "%s_Empty", fullPipeName.c_str());
-    
+
     HANDLE hMapFile = OpenFileMappingA(FILE_MAP_WRITE, FALSE, fullPipeName.c_str());
     if (!hMapFile) {
         fprintf(stderr, "[PIPE] Failed to open %s: %lu\n", fullPipeName.c_str(), GetLastError());
         return;
     }
-    
+
     void* pBuf = MapViewOfFile(hMapFile, FILE_MAP_WRITE, 0, 0, totalSize);
     if (!pBuf) {
         CloseHandle(hMapFile);
         return;
     }
-    
+
     HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, emptyName);
-    HANDLE hReady = OpenEventA(EVENT_MODIFY_STATE, FALSE, readyName);
-    
-    WaitForSingleObject(hEmpty, INFINITE);
-    
+    HANDLE hReady = OpenEventA(EVENT_MODIFY_STATE,               FALSE, readyName);
+
+    if (!opts.overwrite) {
+        // ── Default: wait until consumer has finished reading ─────────────────
+        WaitForSingleObject(hEmpty, INFINITE);
+    } else {
+        // ── Overwrite mode: check if consumer is still reading ────────────────
+        // If the Ready event is already set, a previous write was not yet read.
+        // We reset it (cancel the old "data ready" signal) so our new data wins.
+        // We do NOT wait for Empty – we overwrite immediately.
+        //
+        // ResetEvent on Ready clears any pending "data ready" signal, then we
+        // write our fresh data and signal Ready again below.
+        // This is safe because:
+        //   - If consumer is mid-read it holds the view; our write is coherent
+        //     because Windows shared-memory writes are word-atomic on x86/x64.
+        //   - The consumer will re-check and get the new batch on its next cycle.
+        ResetEvent(hReady);   // discard stale "data ready" notification
+    }
+
+    // ── Write the payload ─────────────────────────────────────────────────────
     uint8_t* buffer = (uint8_t*)pBuf;
     for (int i = 0; i < lengthBytes; i++) {
         buffer[i] = (actualCount >> (i * 8)) & 0xFF;
     }
-    
     memcpy(buffer + lengthBytes, batchData, totalSize - lengthBytes);
-    
-    SetEvent(hReady);
-    
+
+    SetEvent(hReady);   // notify consumer that fresh data is available
+
     UnmapViewOfFile(pBuf);
     CloseHandle(hMapFile);
-    CloseHandle(hEmpty);
-    CloseHandle(hReady);
+    if (hEmpty) CloseHandle(hEmpty);
+    if (hReady) CloseHandle(hReady);
 }
 
 // ============================================================================
-// PIPE I/O HELPER CLASS - Easy manual pipe operations
+// PipeIO HELPER CLASS
 // ============================================================================
 
 class PipeIO {
 private:
     const char* pipeName;
-    int lengthBytes;
-    int packetSize;
-    int batchSize;
-    int bufferSize;
-    
+    int         lengthBytes;
+    int         packetSize;
+    int         batchSize;
+    int         bufferSize;
+
 public:
-    PipeIO(const char* pipe, int pktSize, int batchSz) 
-        : pipeName(pipe), packetSize(pktSize), batchSize(batchSz) {
+    PipeIO(const char* pipe, int pktSize, int batchSz)
+        : pipeName(pipe), packetSize(pktSize), batchSize(batchSz)
+    {
         lengthBytes = calculateLengthBytes(batchSz);
-        bufferSize = lengthBytes + (pktSize * batchSz);
+        bufferSize  = lengthBytes + (pktSize * batchSz);
     }
-    
-    // Read a batch - returns number of packets read
+
+    // ── Read ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Blocking read (default – waits forever).
+     * Returns the number of packets read.
+     */
     int read(int8_t* buffer) {
         return readBatch(pipeName, buffer, lengthBytes, bufferSize);
     }
-    
-    // Write a batch
+
+    /**
+     * Read with explicit options (timeout, etc.).
+     * Returns the number of packets read, or PIPE_RESULT_TIMEOUT (-1).
+     *
+     * Usage:
+     *   PipeReadOptions opts;
+     *   opts.timeoutMs = 2000;          // 2 s timeout
+     *   int n = io.read(buf, opts);
+     *   if (n == PIPE_RESULT_TIMEOUT) { ... handle no data ... }
+     */
+    int read(int8_t* buffer, const PipeReadOptions& opts) {
+        return readBatch(pipeName, buffer, lengthBytes, bufferSize, opts);
+    }
+
+    // ── Write ────────────────────────────────────────────────────────────────
+
+    /**
+     * Blocking write (default – waits for consumer to drain previous batch).
+     */
     void write(int8_t* buffer, int actualCount) {
         writeBatch(pipeName, buffer, actualCount, lengthBytes, bufferSize);
     }
-    
-    int getBufferSize() const { return bufferSize; }
-    int getPacketSize() const { return packetSize; }
-    int getBatchSize() const { return batchSize; }
-    int getLengthBytes() const { return lengthBytes; }
-    const char* getName() const { return pipeName; }
+
+    /**
+     * Write with explicit options (overwrite mode, etc.).
+     *
+     * Usage (overwrite / best-effort):
+     *   PipeWriteOptions opts;
+     *   opts.overwrite = true;
+     *   io.write(buf, count, opts);
+     */
+    void write(int8_t* buffer, int actualCount, const PipeWriteOptions& opts) {
+        writeBatch(pipeName, buffer, actualCount, lengthBytes, bufferSize, opts);
+    }
+
+    // ── Accessors ────────────────────────────────────────────────────────────
+    int         getBufferSize()  const { return bufferSize;  }
+    int         getPacketSize()  const { return packetSize;  }
+    int         getBatchSize()   const { return batchSize;   }
+    int         getLengthBytes() const { return lengthBytes; }
+    const char* getName()        const { return pipeName;    }
 };
 
 // ============================================================================
-// MANUAL I/O BLOCK RUNNER - Full control over read/write timing
+// MANUAL I/O BLOCK RUNNER
 // ============================================================================
 
 template<typename CustomData>
@@ -5809,99 +3888,86 @@ void run_manual_block(
     void (*process_fn)(const char**, const char**, CustomData&, const BlockConfig&),
     CustomData (*init_fn)(const BlockConfig&) = nullptr
 ) {
-    // Get block ID from environment
     int blockId = getEnvInt("BLOCK_ID", 0);
-    int cppPort = getEnvInt("CPP_PORT", 9002);
-    
-    // Connect to socket
+    int cppPort = getEnvInt("CPP_PORT",  9002);
+
     CppSocketClient socket("127.0.0.1", cppPort);
     if (!socket.connect(10)) {
         fprintf(stderr, "[BLOCK] Failed to connect to socket server\n");
         return;
     }
-    
-    // Get process PID
+
     DWORD pid = GetCurrentProcessId();
-    
-    // Send init message with PID
     socket.sendInit(blockId, config.name, pid);
-    
+
     printf("\n========================================\n");
     printf("%s - MANUAL I/O MODE\n", config.name);
     printf("========================================\n");
     printf("Block has full control over read/write timing\n");
-    
-    bool isSource = (config.inputs == 0);
-    bool isSink = (config.outputs == 0);
-    
+
+    bool isSource = (config.inputs  == 0);
+    bool isSink   = (config.outputs == 0);
+
     if (!isSource) {
         printf("INPUTS: %d\n", config.inputs);
         for (int i = 0; i < config.inputs; i++) {
             int bufSize = calculateBufferSize(config.inputPacketSizes[i], config.inputBatchSizes[i]);
-            printf("  Input %d: %d bytes × %d packets = %.2f KB\n",
+            printf("  Input %d: %d bytes x %d packets = %.2f KB\n",
                    i, config.inputPacketSizes[i], config.inputBatchSizes[i], bufSize / 1024.0);
         }
     }
-    
     if (!isSink) {
         printf("OUTPUTS: %d\n", config.outputs);
         for (int i = 0; i < config.outputs; i++) {
             int bufSize = calculateBufferSize(config.outputPacketSizes[i], config.outputBatchSizes[i]);
-            printf("  Output %d: %d bytes × %d packets = %.2f KB\n",
+            printf("  Output %d: %d bytes x %d packets = %.2f KB\n",
                    i, config.outputPacketSizes[i], config.outputBatchSizes[i], bufSize / 1024.0);
         }
     }
-    
     printf("========================================\n\n");
-    
-    // Custom initialization
+
     CustomData customData;
     if (init_fn) {
         printf("Running custom initialization...\n");
         customData = init_fn(config);
     }
-    
+
     socket.sendReady(blockId, config.name);
-    
-    // Metrics
-    int iterationCount = 0;
-    double totalBytes = 0;
+
+    int     iterationCount = 0;
+    double  totalBytes     = 0;
     LARGE_INTEGER freq, startTime, lastTime;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&startTime);
     lastTime = startTime;
-    
-    // Main loop - block controls EVERYTHING
+
     try {
         while (true) {
-            // Block's processing function controls all I/O
             process_fn(pipeIn, pipeOut, customData, config);
-            
             iterationCount++;
-            
-            // Estimate throughput (rough)
+
             if (!isSink && config.outputs > 0) {
                 totalBytes += calculateBufferSize(config.outputPacketSizes[0], config.outputBatchSizes[0]);
             } else if (!isSource && config.inputs > 0) {
                 totalBytes += calculateBufferSize(config.inputPacketSizes[0], config.inputBatchSizes[0]);
             }
-            
-            // Send metrics
+
             LARGE_INTEGER currentTime;
             QueryPerformanceCounter(&currentTime);
             double elapsed = (double)(currentTime.QuadPart - lastTime.QuadPart) / freq.QuadPart;
-            
+
             if (elapsed > 0) {
                 double instantGbps = ((totalBytes * 8.0) / 1e9) / elapsed;
                 socket.sendMetrics(blockId, config.name, iterationCount, instantGbps, totalBytes / 1e9);
+                totalBytes = 0;
                 lastTime = currentTime;
             }
-            
+
             if (iterationCount % 100 == 0) {
                 LARGE_INTEGER now;
                 QueryPerformanceCounter(&now);
                 double totalElapsed = (double)(now.QuadPart - startTime.QuadPart) / freq.QuadPart;
-                double avgGbps = ((totalBytes * 8.0) / 1e9) / totalElapsed;
+                double avgGbps      = ((totalBytes * 8.0) / 1e9) / totalElapsed;
                 printf("Iterations: %d, Avg Throughput: %.2f Gbps\n", iterationCount, avgGbps);
             }
         }
@@ -5909,7 +3975,6 @@ void run_manual_block(
         printf("\nBlock finished\n");
         printf("Total iterations: %d\n", iterationCount);
         printf("Total data: %.2f GB\n", totalBytes / 1e9);
-        
         socket.sendStopped(blockId, config.name);
     }
 }
@@ -5923,156 +3988,212 @@ void run_manual_block(
 #include <stdlib.h>
 
 // PRODUCTION VERSION - Instance-aware pipe names
+//
+// USAGE
+// ─────
+// Read (blocking / infinite wait — original behaviour):
+//   data = pipeline_mex('read', 'PipeName', sizeBytes)
+//
+// Read with timeout (returns empty int8 array on timeout):
+//   data = pipeline_mex('read', 'PipeName', sizeBytes, timeoutMs)
+//   e.g. data = pipeline_mex('read', 'P1', 9001, 5000)   % 5-second timeout
+//        if isempty(data), disp('timeout'); end
+//
+// Write (blocking — waits for consumer to drain previous batch):
+//   pipeline_mex('write', 'PipeName', int8Data)
+//
+// Write with overwrite (does NOT wait for consumer — best-effort / real-time):
+//   pipeline_mex('write', 'PipeName', int8Data, 'overwrite')
+//   e.g. pipeline_mex('write', 'P2', myData, 'overwrite')
 
-void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
+void mexFunction(int nlhs, mxArray *plhs[],
+                 int nrhs, const mxArray *prhs[])
+{
     if (nrhs < 2) {
-        mexErrMsgTxt("Usage: pipeline_mex('write'/'read', 'PipeName', data/size)");
+        mexErrMsgTxt(
+            "Usage:\n"
+            "  pipeline_mex('read',  'PipeName', sizeBytes [, timeoutMs])\n"
+            "  pipeline_mex('write', 'PipeName', int8Data  [, 'overwrite'])");
     }
-    
+
     char cmd[16];
     mxGetString(prhs[0], cmd, sizeof(cmd));
-    
+
     char shortPipeName[128];
     mxGetString(prhs[1], shortPipeName, sizeof(shortPipeName));
-    
-    // ===== BUILD FULL PIPE NAME WITH INSTANCE ID =====
+
+    // ── Build full instance-scoped pipe name ──────────────────────────────────
     char pipeName[256];
-    char* instanceId = getenv("INSTANCE_ID");
-    
+    char *instanceId = getenv("INSTANCE_ID");
     if (instanceId && strlen(instanceId) > 0) {
         sprintf(pipeName, "Instance_%s_%s", instanceId, shortPipeName);
     } else {
         strcpy(pipeName, shortPipeName);
     }
-    // =================================================
-    
-    // Create event names
+
+    // ── Event names ───────────────────────────────────────────────────────────
     char readyName[256], emptyName[256];
     sprintf(readyName, "%s_Ready", pipeName);
     sprintf(emptyName, "%s_Empty", pipeName);
-    
-    if (strcmp(cmd, "write") == 0) {
-        // WRITE OPERATION
+
+    // =========================================================================
+    // READ
+    // =========================================================================
+    if (strcmp(cmd, "read") == 0) {
+
         if (nrhs < 3) {
-            mexErrMsgTxt("write requires data argument");
+            mexErrMsgTxt("read requires a size argument: pipeline_mex('read', 'PipeName', sizeBytes)");
         }
-        
-        const mxArray* dataArray = prhs[2];
-        if (!mxIsInt8(dataArray)) {
-            mexErrMsgTxt("Data must be int8");
-        }
-        
-        int8_T* data = (int8_T*)mxGetData(dataArray);
-        size_t dataSize = mxGetNumberOfElements(dataArray);
-        
-        // Open shared memory
-        HANDLE hMapFile = OpenFileMappingA(FILE_MAP_WRITE, FALSE, pipeName);
-        if (!hMapFile) {
-            char err[256];
-            sprintf(err, "Failed to open %s (Error: %lu)", pipeName, GetLastError());
-            mexErrMsgTxt(err);
-        }
-        
-        // Map view
-        void* pBuf = MapViewOfFile(hMapFile, FILE_MAP_WRITE, 0, 0, dataSize);
-        if (!pBuf) {
-            CloseHandle(hMapFile);
-            mexErrMsgTxt("MapViewOfFile failed");
-        }
-        
-        // Open events
-        HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, emptyName);
-        HANDLE hReady = OpenEventA(EVENT_MODIFY_STATE, FALSE, readyName);
-        
-        if (!hEmpty || !hReady) {
-            UnmapViewOfFile(pBuf);
-            CloseHandle(hMapFile);
-            mexErrMsgTxt("Failed to open events");
-        }
-        
-        // Wait for empty (INFINITE wait - blocks will stay alive)
-        DWORD waitResult = WaitForSingleObject(hEmpty, INFINITE);
-        if (waitResult != WAIT_OBJECT_0) {
-            UnmapViewOfFile(pBuf);
-            CloseHandle(hMapFile);
-            CloseHandle(hEmpty);
-            CloseHandle(hReady);
-            mexErrMsgTxt("Wait failed");
-        }
-        
-        // Copy data
-        memcpy(pBuf, data, dataSize);
-        
-        // Signal ready
-        SetEvent(hReady);
-        
-        // Cleanup
-        UnmapViewOfFile(pBuf);
-        CloseHandle(hMapFile);
-        CloseHandle(hEmpty);
-        CloseHandle(hReady);
-        
-    } else if (strcmp(cmd, "read") == 0) {
-        // READ OPERATION
-        if (nrhs < 3) {
-            mexErrMsgTxt("read requires size argument");
-        }
-        
+
         size_t readSize = (size_t)mxGetScalar(prhs[2]);
-        
+
+        // Optional 4th argument: timeout in milliseconds (default = INFINITE)
+        DWORD timeoutMs = INFINITE;
+        if (nrhs >= 4) {
+            double t = mxGetScalar(prhs[3]);
+            if (t >= 0) {
+                timeoutMs = (DWORD)t;
+            }
+        }
+
         // Open shared memory
         HANDLE hMapFile = OpenFileMappingA(FILE_MAP_READ, FALSE, pipeName);
         if (!hMapFile) {
             char err[256];
-            sprintf(err, "Failed to open %s (Error: %lu)", pipeName, GetLastError());
+            sprintf(err, "Failed to open shared memory '%s' (Error: %lu)", pipeName, GetLastError());
             mexErrMsgTxt(err);
         }
-        
-        // Map view
-        void* pBuf = MapViewOfFile(hMapFile, FILE_MAP_READ, 0, 0, readSize);
+
+        void *pBuf = MapViewOfFile(hMapFile, FILE_MAP_READ, 0, 0, readSize);
         if (!pBuf) {
             CloseHandle(hMapFile);
             mexErrMsgTxt("MapViewOfFile failed");
         }
-        
-        // Open events
+
         HANDLE hReady = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, readyName);
-        HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE, FALSE, emptyName);
-        
+        HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE,               FALSE, emptyName);
+
         if (!hReady || !hEmpty) {
             UnmapViewOfFile(pBuf);
             CloseHandle(hMapFile);
-            mexErrMsgTxt("Failed to open events");
+            if (hReady) CloseHandle(hReady);
+            if (hEmpty) CloseHandle(hEmpty);
+            mexErrMsgTxt("Failed to open pipe events");
         }
-        
-        // Wait for ready (INFINITE wait - blocks will stay alive)
-        DWORD waitResult = WaitForSingleObject(hReady, INFINITE);
+
+        // ── Wait for data ─────────────────────────────────────────────────────
+        DWORD waitResult = WaitForSingleObject(hReady, timeoutMs);
+
+        if (waitResult == WAIT_TIMEOUT) {
+            // Return empty int8 array so caller can detect the timeout
+            UnmapViewOfFile(pBuf);
+            CloseHandle(hMapFile);
+            CloseHandle(hReady);
+            CloseHandle(hEmpty);
+            plhs[0] = mxCreateNumericMatrix(0, 0, mxINT8_CLASS, mxREAL);
+            return;
+        }
+
         if (waitResult != WAIT_OBJECT_0) {
             UnmapViewOfFile(pBuf);
             CloseHandle(hMapFile);
             CloseHandle(hReady);
             CloseHandle(hEmpty);
-            mexErrMsgTxt("Wait failed");
+            mexErrMsgTxt("WaitForSingleObject failed (WAIT_FAILED)");
         }
-        
-        // Create output array
+
+        // ── Copy data out ─────────────────────────────────────────────────────
         plhs[0] = mxCreateNumericMatrix(readSize, 1, mxINT8_CLASS, mxREAL);
-        int8_T* outData = (int8_T*)mxGetData(plhs[0]);
-        
-        // Copy data
+        int8_T *outData = (int8_T *)mxGetData(plhs[0]);
         memcpy(outData, pBuf, readSize);
-        
-        // Signal empty
-        SetEvent(hEmpty);
-        
-        // Cleanup
+
+        SetEvent(hEmpty);   // signal consumer has finished reading
+
         UnmapViewOfFile(pBuf);
         CloseHandle(hMapFile);
         CloseHandle(hReady);
         CloseHandle(hEmpty);
-        
+
+    // =========================================================================
+    // WRITE
+    // =========================================================================
+    } else if (strcmp(cmd, "write") == 0) {
+
+        if (nrhs < 3) {
+            mexErrMsgTxt("write requires a data argument: pipeline_mex('write', 'PipeName', int8Data)");
+        }
+
+        const mxArray *dataArray = prhs[2];
+        if (!mxIsInt8(dataArray)) {
+            mexErrMsgTxt("Data must be int8");
+        }
+
+        int8_T *data     = (int8_T *)mxGetData(dataArray);
+        size_t  dataSize = mxGetNumberOfElements(dataArray);
+
+        // Optional 4th argument: 'overwrite'
+        // When set, we do NOT wait for the consumer to drain the previous batch;
+        // we immediately overwrite the buffer with new data.
+        bool overwrite = false;
+        if (nrhs >= 4) {
+            char opt[32] = {0};
+            mxGetString(prhs[3], opt, sizeof(opt));
+            overwrite = (strcmp(opt, "overwrite") == 0);
+        }
+
+        // Open shared memory
+        HANDLE hMapFile = OpenFileMappingA(FILE_MAP_WRITE, FALSE, pipeName);
+        if (!hMapFile) {
+            char err[256];
+            sprintf(err, "Failed to open shared memory '%s' (Error: %lu)", pipeName, GetLastError());
+            mexErrMsgTxt(err);
+        }
+
+        void *pBuf = MapViewOfFile(hMapFile, FILE_MAP_WRITE, 0, 0, dataSize);
+        if (!pBuf) {
+            CloseHandle(hMapFile);
+            mexErrMsgTxt("MapViewOfFile failed");
+        }
+
+        HANDLE hEmpty = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, emptyName);
+        HANDLE hReady = OpenEventA(EVENT_MODIFY_STATE,               FALSE, readyName);
+
+        if (!hEmpty || !hReady) {
+            UnmapViewOfFile(pBuf);
+            CloseHandle(hMapFile);
+            if (hEmpty) CloseHandle(hEmpty);
+            if (hReady) CloseHandle(hReady);
+            mexErrMsgTxt("Failed to open pipe events");
+        }
+
+        if (!overwrite) {
+            // ── Default: wait until consumer has read previous data ───────────
+            DWORD waitResult = WaitForSingleObject(hEmpty, INFINITE);
+            if (waitResult != WAIT_OBJECT_0) {
+                UnmapViewOfFile(pBuf);
+                CloseHandle(hMapFile);
+                CloseHandle(hEmpty);
+                CloseHandle(hReady);
+                mexErrMsgTxt("Wait for empty failed");
+            }
+        } else {
+            // ── Overwrite mode: discard any stale "data ready" signal ─────────
+            // Reset Ready so any consumer that hasn't read yet will receive our
+            // fresh data instead of the old batch.
+            ResetEvent(hReady);
+        }
+
+        // ── Write the payload ─────────────────────────────────────────────────
+        memcpy(pBuf, data, dataSize);
+        SetEvent(hReady);   // notify consumer that new data is ready
+
+        UnmapViewOfFile(pBuf);
+        CloseHandle(hMapFile);
+        CloseHandle(hEmpty);
+        CloseHandle(hReady);
+
     } else {
-        mexErrMsgTxt("Unknown command. Use 'write' or 'read'");
+        mexErrMsgTxt("Unknown command. Use 'read' or 'write'");
     }
 }
 
@@ -6423,789 +4544,6 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\App.jsx ---
-import React, { useState, useRef, useEffect } from 'react';
-import { Toolbar } from './components/Toolbar';
-import { Sidebar } from './components/Sidebar';
-import { CanvasRenderer } from './components/CanvasRenderer';
-import { CodeEditorModal } from './components/CodeEditorModal';
-import { GraphWindow } from './components/GraphWindow';
-import { useHistory } from './hooks/useHistory';
-import { useProcessManager } from './hooks/useProcessManager';
-import { useCanvasInteraction } from './hooks/useCanvasInteraction';
-import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { useFileOperations } from './hooks/useFileOperations';
-import { useServerOperations, signalBlockReady, signalBlockError } from './hooks/useServerOperations';
-import { useCanvasHandlers } from './hooks/useCanvasHandlers';
-import { GRID_SIZE, parseMatlabBlock, calculatePortPositions, BLOCK_WIDTH, BLOCK_HEIGHT } from './utils/blockUtils';
-import { parseCppBlock } from './utils/cppBlockUtils';
-
-const PipelineEditor = () => {
-  const [sidebarMode, setSidebarMode] = useState(null);
-  const [selectedBlocks, setSelectedBlocks] = useState([]);
-  const [selectedConnections, setSelectedConnections] = useState([]);
-  const [isEditingCode, setIsEditingCode] = useState(false);
-  const [serverRunning, setServerRunning] = useState(false);
-  const [executionLog, setExecutionLog] = useState([]);
-  const [projectDir, setProjectDir] = useState('');
-  const [clipboard, setClipboard] = useState(null);
-  const [isStarting, setIsStarting] = useState(false);
-  const [graphWindows, setGraphWindows] = useState({});
-  const [socketConnected, setSocketConnected] = useState(false);
-  const [instanceConfig, setInstanceConfig] = useState(null);
-  
-  const canvasRef = useRef(null);
-  const serverMessageListenerRef = useRef(null);
-  const socketStatusListenerRef = useRef(null);
-  const blockMessageListenerRef = useRef(null);
-
-  const addLog = (type, message) => {
-    const timestamp = new Date().toLocaleTimeString();
-    console.log(`[${timestamp}] [${type}] ${message}`);
-    setExecutionLog(prev => [...prev, { type, message, time: timestamp }]);
-  };
-
-  const {
-    blocks,
-    setBlocks,
-    connections,
-    setConnections,
-    updateBlocksWithHistory,
-    updateConnectionsWithHistory,
-    updateBothWithHistory,
-    undo,
-    redo,
-    saveToHistory
-  } = useHistory();
-
-  const {
-    blockProcesses,
-    setBlockProcesses,
-    blockMetrics,
-    setBlockMetrics,
-    graphData,
-    setGraphData,
-    blockStatus,
-    setBlockStatus
-  } = useProcessManager(addLog);
-
-  const {
-    draggingBlock,
-    setDraggingBlock,
-    dragOffset,
-    setDragOffset,
-    currentConnection,
-    setCurrentConnection,
-    mousePosition,
-    setMousePosition,
-    hoveredConnectionPoint,
-    setHoveredConnectionPoint,
-    draggingWaypoint,
-    setDraggingWaypoint,
-    hoveredWaypoint,
-    setHoveredWaypoint,
-    hoveredConnection,
-    setHoveredConnection,
-    hoveredBlock,
-    setHoveredBlock,
-    selectionBox,
-    setSelectionBox,
-    isSelecting,
-    setIsSelecting,
-    selectionStart,
-    setSelectionStart,
-    snapToGrid
-  } = useCanvasInteraction(GRID_SIZE);
-
-  const {
-    handleFileUpload,
-    handleSaveDiagram,
-    handleLoadDiagram
-  } = useFileOperations({
-    blocks,
-    connections,
-    projectDir,
-    addLog,
-    updateBothWithHistory,
-    updateBlocksWithHistory,
-    snapToGrid
-  });
-
-  const {
-    handleStartAll,
-    handleStopAll,
-    handleStartBlock,
-    handleStopBlock
-  } = useServerOperations({
-    blocks,
-    connections,
-    projectDir,
-    instanceConfig,
-    setServerRunning,
-    setBlockProcesses,
-    setIsStarting,
-    addLog,
-    setBlockMetrics
-  });
-
-  const {
-    handleCanvasClick,
-    handleMouseMove,
-    handleMouseUp,
-    handleRightClick,
-    handleDoubleClickCanvas,
-    handleCanvasMouseDown
-  } = useCanvasHandlers({
-    blocks,
-    setBlocks,
-    connections,
-    setConnections,
-    currentConnection,
-    setCurrentConnection,
-    mousePosition,
-    setMousePosition,
-    selectedBlocks,
-    setSelectedBlocks,
-    selectedConnections,
-    setSelectedConnections,
-    draggingBlock,
-    setDraggingBlock,
-    dragOffset,
-    setDragOffset,
-    draggingWaypoint,
-    setDraggingWaypoint,
-    isSelecting,
-    setIsSelecting,
-    selectionStart,
-    setSelectionStart,
-    selectionBox,
-    setSelectionBox,
-    setHoveredConnectionPoint,
-    setHoveredWaypoint,
-    setHoveredConnection,
-    setHoveredBlock,
-    serverRunning,
-    snapToGrid,
-    saveToHistory,
-    addLog,
-    setSidebarMode,
-    canvasRef
-  });
-
-  // Get instance config and project directory on mount
-  useEffect(() => {
-    const getConfig = async () => {
-      const config = await window.electronAPI.getInstanceConfig();
-      setInstanceConfig(config);
-      addLog('info', `Instance ID: ${config.instanceId}`);
-      addLog('info', `Server Port: ${config.serverPort}`);
-      addLog('info', `MATLAB Port: ${config.matlabPort}`);
-      addLog('info', `C++ Port:    ${config.cppPort}`);
-      
-      const dir = await window.electronAPI.getAppPath();
-      setProjectDir(dir);
-    };
-    getConfig();
-  }, []);
-
-  // Listen to server socket messages
-  useEffect(() => {
-    if (serverMessageListenerRef.current) {
-      serverMessageListenerRef.current();
-    }
-    
-    serverMessageListenerRef.current = window.electronAPI.onServerMessage((message) => {
-      console.log('Server message received:', message);
-      
-      const { type, message: msg } = message;
-      
-      switch (type) {
-        case 'CONNECTED':
-          addLog('success', '🔌 Socket connected to server');
-          setSocketConnected(true);
-          break;
-          
-        case 'STATUS':
-          addLog('info', `[Server] ${msg}`);
-          break;
-          
-        case 'PIPE_CREATED':
-          addLog('success', `[Server] ${msg}`);
-          break;
-          
-        case 'READY':
-          addLog('success', `[Server] ${msg}`);
-          setServerRunning(true);
-          break;
-          
-        case 'ERROR':
-          addLog('error', `[Server] ${msg}`);
-          break;
-          
-        case 'HEARTBEAT':
-          console.log('[Server Heartbeat]');
-          break;
-          
-        case 'SHUTDOWN':
-          addLog('warning', `[Server] ${msg}`);
-          setServerRunning(false);
-          setSocketConnected(false);
-          break;
-          
-        default:
-          addLog('info', `[Server] ${type}: ${msg}`);
-      }
-    });
-    
-    return () => {
-      if (serverMessageListenerRef.current) {
-        serverMessageListenerRef.current();
-      }
-    };
-  }, []);
-
-  // Listen to socket connection status
-  useEffect(() => {
-    if (socketStatusListenerRef.current) {
-      socketStatusListenerRef.current();
-    }
-    
-    socketStatusListenerRef.current = window.electronAPI.onServerSocketStatus((status) => {
-      console.log('Socket status:', status);
-      
-      if (status.connected) {
-        setSocketConnected(true);
-        addLog('success', `Socket connected on port ${status.port || 9000}`);
-      } else {
-        setSocketConnected(false);
-        if (status.error) {
-          addLog('error', `Socket error: ${status.error}`);
-        } else {
-          addLog('warning', 'Socket disconnected');
-        }
-        setServerRunning(false);
-      }
-    });
-    
-    return () => {
-      if (socketStatusListenerRef.current) {
-        socketStatusListenerRef.current();
-      }
-    };
-  }, []);
-
-  // Listen to block messages (MATLAB/C++/Python) via language-specific socket servers
-  useEffect(() => {
-    if (blockMessageListenerRef.current) {
-      blockMessageListenerRef.current();
-    }
-    
-    blockMessageListenerRef.current = window.electronAPI.onBlockMessage((message) => {
-      console.log(`[${message.language}] Socket message:`, message);
-      
-      const { protocol, blockId, blockName, type, data, timestamp, language } = message;
-      
-      switch (type) {
-        case 'BLOCK_INIT':
-          addLog('info', `[${blockName}] [${language}] Initializing...`);
-          setBlockStatus(prev => ({ ...prev, [blockId]: 'initializing' }));
-          break;
-          
-        case 'BLOCK_READY':
-          addLog('success', `[${blockName}] [${language}] Ready`);
-          setBlockStatus(prev => ({ ...prev, [blockId]: 'ready' }));
-          // ✅ FIX: Signal the waiting Promise in useServerOperations directly.
-          // The old code relied on polling React state which had stale closure issues.
-          signalBlockReady(blockId);
-          setBlockProcesses(prev => {
-            const blockEntry = Object.entries(prev).find(([key, proc]) => 
-              proc.name === blockName
-            );
-            if (blockEntry) {
-              const [key, proc] = blockEntry;
-              return {
-                ...prev,
-                [key]: { ...proc, status: 'running', language }
-              };
-            }
-            return prev;
-          });
-          break;
-          
-        case 'BLOCK_METRICS':
-          setBlockMetrics(prev => ({
-            ...prev,
-            [blockId]: {
-              frames: data.frames || 0,
-              gbps: data.gbps || 0,
-              totalGB: data.totalGB,
-              totalFrames: data.totalFrames
-            }
-          }));
-          break;
-          
-        case 'BLOCK_GRAPH':
-          const graphPoint = { x: data.x, y: data.y };
-          setGraphData(prev => {
-            const existing = prev[blockId] || { xData: [], yData: [] };
-            const maxPoints = 500;
-            
-            const newXData = [...existing.xData, graphPoint.x];
-            const newYData = [...existing.yData, graphPoint.y];
-            
-            if (newXData.length > maxPoints) {
-              newXData.shift();
-              newYData.shift();
-            }
-            
-            return {
-              ...prev,
-              [blockId]: {
-                xData: newXData,
-                yData: newYData
-              }
-            };
-          });
-          break;
-          
-        case 'BLOCK_ERROR':
-          addLog('error', `[${blockName}] [${language}] ${data.error || data.status || 'Error'}`);
-          setBlockStatus(prev => ({ ...prev, [blockId]: 'error' }));
-          // ✅ FIX: Also reject the waiting Promise so startup doesn't hang on errored blocks
-          signalBlockError(blockId, data.error || data.status || 'Block error');
-          break;
-          
-        case 'BLOCK_STOPPING':
-          addLog('info', `[${blockName}] [${language}] Stopping...`);
-          setBlockStatus(prev => ({ ...prev, [blockId]: 'stopping' }));
-          break;
-          
-        case 'BLOCK_STOPPED':
-          addLog('info', `[${blockName}] [${language}] Stopped`);
-          setBlockStatus(prev => {
-            const newStatus = { ...prev };
-            delete newStatus[blockId];
-            return newStatus;
-          });
-          break;
-      }
-    });
-    
-    return () => {
-      if (blockMessageListenerRef.current) {
-        blockMessageListenerRef.current();
-      }
-    };
-  }, []);
-
-  // Update graph windows when graph data changes
-  useEffect(() => {
-    Object.entries(graphData).forEach(([blockId, data]) => {
-      if (!graphWindows[blockId]) {
-        const block = blocks.find(b => b.id === parseInt(blockId));
-        if (block && block.isGraph) {
-          setGraphWindows(prev => ({
-            ...prev,
-            [blockId]: { blockName: block.name, graphType: block.graphType }
-          }));
-        }
-      }
-    });
-  }, [graphData, blocks]);
-
-  const handleCopy = () => {
-    if (selectedBlocks.length > 0) {
-      setClipboard({ type: 'blocks', data: JSON.parse(JSON.stringify(selectedBlocks)) });
-      addLog('success', `Copied ${selectedBlocks.length} block(s)`);
-    }
-  };
-
-  const handlePaste = () => {
-    if (clipboard && clipboard.type === 'blocks') {
-      const idMapping = {};
-      const timestamp = Date.now();
-      const newBlocks = clipboard.data.map((block, index) => {
-        const newId = timestamp + Math.random() * 10000 + index * 1000;
-        idMapping[block.id] = newId;
-        return {
-          ...JSON.parse(JSON.stringify(block)),
-          id: newId,
-          x: snapToGrid(block.x + 40),
-          y: snapToGrid(block.y + 40),
-          zIndex: blocks.length + Object.keys(idMapping).length,
-          name: block.name.includes('_copy') ? block.name : `${block.name}_copy${index + 1}`
-        };
-      });
-      
-      const allBlocks = [...blocks, ...newBlocks];
-      updateBlocksWithHistory(allBlocks);
-      setSelectedBlocks(newBlocks);
-      setSidebarMode('config');
-      addLog('success', `Pasted ${newBlocks.length} block(s) with unique IDs: ${newBlocks.map(b => b.id).join(', ')}`);
-    }
-  };
-
-  const handleDelete = () => {
-    if (serverRunning && selectedConnections.length > 0) {
-      addLog('warning', 'Cannot delete connections while server is running');
-      return;
-    }
-    
-    if (selectedBlocks.length > 0) {
-      const selectedIds = selectedBlocks.map(b => b.id);
-      const newBlocks = blocks.filter(b => !selectedIds.includes(b.id));
-      const newConnections = connections.filter(c => 
-        !selectedIds.includes(c.fromBlock) && !selectedIds.includes(c.toBlock)
-      );
-      updateBothWithHistory(newBlocks, newConnections);
-      addLog('info', `Deleted ${selectedBlocks.length} block(s)`);
-      setSelectedBlocks([]);
-      setSidebarMode(null);
-    } else if (selectedConnections.length > 0) {
-      const selectedIds = selectedConnections.map(c => c.id);
-      const newConnections = connections.filter(c => !selectedIds.includes(c.id));
-      updateConnectionsWithHistory(newConnections);
-      addLog('info', `Deleted ${selectedConnections.length} connection(s)`);
-      setSelectedConnections([]);
-    }
-  };
-
-  const handleUndo = () => {
-    if (undo()) {
-      setSelectedBlocks([]);
-      setSelectedConnections([]);
-      addLog('info', 'Undo');
-    }
-  };
-
-  const handleRedo = () => {
-    if (redo()) {
-      setSelectedBlocks([]);
-      setSelectedConnections([]);
-      addLog('info', 'Redo');
-    }
-  };
-
-  const handleEditBlockCode = (block) => {
-    setSelectedBlocks([block]);
-    setIsEditingCode(true);
-  };
-
-  const handleSaveBlockCode = async (updatedCode) => {
-    const block = selectedBlocks[0];
-    
-    try {
-      // RE-PARSE the block with updated code based on language
-      let reparsedData;
-      if (block.language === 'matlab') {
-        reparsedData = parseMatlabBlock(updatedCode, block.fileName);
-      } else if (block.language === 'cpp') {
-        reparsedData = parseCppBlock(updatedCode, block.fileName);
-      } else {
-        throw new Error(`Unsupported language: ${block.language}`);
-      }
-      
-      // Calculate new port positions
-      const newPortPositions = calculatePortPositions(
-        reparsedData.inputs, 
-        reparsedData.outputs, 
-        reparsedData.ltr,
-        BLOCK_WIDTH,
-        BLOCK_HEIGHT,
-        GRID_SIZE
-      );
-      
-      // Create updated block with ALL new batch processing fields
-      const updatedBlock = { 
-        ...block, 
-        code: updatedCode,
-        name: reparsedData.name,
-        inputs: reparsedData.inputs,
-        outputs: reparsedData.outputs,
-        config: reparsedData.config,
-        
-        // BATCH PROCESSING FIELDS
-        inputPacketSizes: reparsedData.inputPacketSizes,
-        inputBatchSizes: reparsedData.inputBatchSizes,
-        outputPacketSizes: reparsedData.outputPacketSizes,
-        outputBatchSizes: reparsedData.outputBatchSizes,
-        inputBufferSizes: reparsedData.inputBufferSizes,
-        outputBufferSizes: reparsedData.outputBufferSizes,
-        inputLengthBytes: reparsedData.inputLengthBytes,
-        outputLengthBytes: reparsedData.outputLengthBytes,
-        
-        // Legacy fields
-        sizeRelation: reparsedData.sizeRelation,
-        inputSize: reparsedData.inputSize,
-        outputSize: reparsedData.outputSize,
-        inputSizes: reparsedData.inputSizes,
-        outputSizes: reparsedData.outputSizes,
-        
-        portPositions: newPortPositions,
-        ltr: reparsedData.ltr,
-        startWithAll: reparsedData.startWithAll,
-        isGraph: reparsedData.isGraph,
-        graphType: reparsedData.graphType,
-        description: reparsedData.description,
-        language: reparsedData.language || block.language
-      };
-      
-      // Check if any connections need to be removed due to port changes
-      const removedConnections = connections.filter(conn => {
-        if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) {
-          return true;
-        }
-        if (conn.toBlock === block.id && conn.toPort >= reparsedData.inputs) {
-          return true;
-        }
-        return false;
-      });
-      
-      // Check if any existing connections have size mismatches
-      const invalidConnections = connections.filter(conn => {
-        if (conn.fromBlock === block.id) {
-          const toBlock = blocks.find(b => b.id === conn.toBlock);
-          if (toBlock) {
-            const outputPacketSize = reparsedData.outputPacketSizes[conn.fromPort];
-            const outputBatchSize = reparsedData.outputBatchSizes[conn.fromPort];
-            const inputPacketSize = toBlock.inputPacketSizes[conn.toPort];
-            const inputBatchSize = toBlock.inputBatchSizes[conn.toPort];
-            
-            if (outputPacketSize !== inputPacketSize || outputBatchSize !== inputBatchSize) {
-              return true;
-            }
-          }
-        }
-        
-        if (conn.toBlock === block.id) {
-          const fromBlock = blocks.find(b => b.id === conn.fromBlock);
-          if (fromBlock) {
-            const inputPacketSize = reparsedData.inputPacketSizes[conn.toPort];
-            const inputBatchSize = reparsedData.inputBatchSizes[conn.toPort];
-            const outputPacketSize = fromBlock.outputPacketSizes[conn.fromPort];
-            const outputBatchSize = fromBlock.outputBatchSizes[conn.fromPort];
-            
-            if (inputPacketSize !== outputPacketSize || inputBatchSize !== outputBatchSize) {
-              return true;
-            }
-          }
-        }
-        
-        return false;
-      });
-      
-      const allRemovedConnections = [...new Set([...removedConnections, ...invalidConnections])];
-      
-      const newBlocks = blocks.map(b => b.id === block.id ? updatedBlock : b);
-      const newConnections = connections.filter(conn => !allRemovedConnections.includes(conn));
-      
-      if (allRemovedConnections.length > 0) {
-        addLog('warning', `Removed ${allRemovedConnections.length} connection(s) due to port or size changes`);
-        updateBothWithHistory(newBlocks, newConnections);
-      } else {
-        updateBlocksWithHistory(newBlocks);
-      }
-      
-      // SAVE TO DISK IMMEDIATELY
-      const filePath = block.language === 'matlab' 
-        ? `${projectDir}/matlab_blocks/${block.fileName}`
-        : `${projectDir}/cpp_blocks/${block.fileName}`;
-      
-      try {
-        await window.electronAPI.writeFile(filePath, updatedCode);
-        addLog('success', `Saved ${updatedBlock.name} to disk`);
-      } catch (err) {
-        addLog('error', `Failed to save to disk: ${err.message}`);
-      }
-      
-      setSelectedBlocks([updatedBlock]);
-      addLog('success', `Updated ${updatedBlock.name} - Applied new configuration`);
-      setIsEditingCode(false);
-    } catch (error) {
-      addLog('error', `Failed to parse updated code: ${error.message}`);
-      alert(`Error updating block:\n${error.message}\n\nPlease check your block configuration.`);
-    }
-  };
-
-  const handleCanvasClickWithButtons = (e) => {
-    if (serverRunning && hoveredBlock) {
-      const canvas = canvasRef.current;
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      
-      const buttonSize = 20;
-      const padding = 6;
-      const buttonX = hoveredBlock.x + padding;
-      const buttonY = hoveredBlock.y + padding;
-      
-      if (x >= buttonX && x <= buttonX + buttonSize && y >= buttonY && y <= buttonY + buttonSize) {
-        const isRunning = blockStatus[hoveredBlock.id] === 'ready';
-        if (isRunning) {
-          handleStopBlock(hoveredBlock, blockProcesses, setBlockMetrics);
-        } else {
-          handleStartBlock(hoveredBlock, blockProcesses);
-        }
-        e.stopPropagation();
-        return;
-      }
-    }
-    
-    handleCanvasClick(e);
-  };
-
-  useKeyboardShortcuts({
-    onUndo: handleUndo,
-    onRedo: handleRedo,
-    onCopy: handleCopy,
-    onPaste: handlePaste,
-    onDelete: handleDelete,
-    isEditingCode,
-    currentConnection,
-    setCurrentConnection,
-    setMousePosition,
-    addLog
-  });
-
-  return (
-    <div className="flex h-screen bg-gray-100">
-      <Sidebar
-        sidebarMode={sidebarMode}
-        selectedBlocks={selectedBlocks}
-        blocks={blocks}
-        connections={connections}
-        serverRunning={serverRunning}
-        blockProcesses={blockProcesses}
-        blockStatus={blockStatus}
-        executionLog={executionLog}
-        socketConnected={socketConnected}
-        instanceConfig={instanceConfig}
-        onEditCode={handleEditBlockCode}
-        onDelete={handleDelete}
-        onBlockColorChange={(block, color) => {
-          const updated = { ...block, color };
-          const newBlocks = blocks.map(b => b.id === block.id ? updated : b);
-          updateBlocksWithHistory(newBlocks);
-          setSelectedBlocks([updated]);
-        }}
-        onKillProcess={async (pid, name) => {
-          const result = await window.electronAPI.killProcess(pid);
-          if (result.success) {
-            addLog('info', `Killed process ${name} (PID: ${pid})`);
-          }
-        }}
-        onClearLog={() => setExecutionLog([])}
-      />
-      
-      <div className="flex-1 flex flex-col">
-        <Toolbar
-          onStart={handleStartAll}
-          onStopAll={handleStopAll}
-          onImport={async () => {
-            const newBlocks = await handleFileUpload();
-            if (newBlocks && newBlocks.length > 0) {
-              setSelectedBlocks(newBlocks);
-              setSidebarMode('config');
-            }
-          }}
-          onLoad={handleLoadDiagram}
-          onSave={handleSaveDiagram}
-          serverRunning={serverRunning}
-          isStarting={isStarting}
-          hasProcesses={Object.keys(blockProcesses).length > 0}
-        />
-        
-        <div className="flex-1 overflow-auto bg-gray-50">
-          <canvas 
-            ref={canvasRef} 
-            width={2000} 
-            height={1500}
-            className={currentConnection ? "cursor-crosshair" : (hoveredWaypoint || draggingWaypoint ? "cursor-move" : "cursor-default")}
-            onClick={handleCanvasClickWithButtons}
-            onMouseDown={handleCanvasMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            onContextMenu={handleRightClick}
-            onDoubleClick={(e) => {
-              const result = handleDoubleClickCanvas(e);
-              if (result.type === 'block') {
-                handleEditBlockCode(result.block);
-              }
-            }}
-          />
-          <CanvasRenderer
-            canvasRef={canvasRef}
-            blocks={blocks}
-            connections={connections}
-            selectedBlocks={selectedBlocks}
-            selectedConnections={selectedConnections}
-            currentConnection={currentConnection}
-            mousePosition={mousePosition}
-            hoveredConnection={hoveredConnection}
-            hoveredWaypoint={hoveredWaypoint}
-            hoveredBlock={hoveredBlock}
-            hoveredConnectionPoint={hoveredConnectionPoint}
-            draggingWaypoint={draggingWaypoint}
-            blockProcesses={blockProcesses}
-            blockMetrics={blockMetrics}
-            blockStatus={blockStatus}
-            selectionBox={selectionBox}
-            serverRunning={serverRunning}
-          />
-        </div>
-      </div>
-
-      {Object.entries(graphWindows).map(([blockId, windowInfo]) => (
-        <GraphWindow
-          key={blockId}
-          blockId={blockId}
-          blockName={windowInfo.blockName}
-          graphType={windowInfo.graphType}
-          data={graphData[blockId] || { xData: [], yData: [] }}
-          onClose={() => {
-            setGraphWindows(prev => {
-              const newWindows = { ...prev };
-              delete newWindows[blockId];
-              return newWindows;
-            });
-          }}
-        />
-      ))}
-
-      {isEditingCode && selectedBlocks.length === 1 && (
-        <CodeEditorModal
-          block={selectedBlocks[0]}
-          onSave={handleSaveBlockCode}
-          onClose={() => setIsEditingCode(false)}
-        />
-      )}
-    </div>
-  );
-};
-
-export default PipelineEditor;
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\index.css ---
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  overflow: hidden;
-}
-
-#root {
-  width: 100vw;
-  height: 100vh;
-}
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\main.js ---
 import { app, BrowserWindow, ipcMain, dialog, screen } from 'electron';
@@ -8018,1181 +5356,6 @@ if (rootElement) {
 } else {
   console.error('Root element not found!');
 }
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\components\CanvasRenderer.jsx ---
-import { useEffect } from 'react';
-import { GRID_SIZE, BLOCK_WIDTH, BLOCK_HEIGHT } from '../utils/blockUtils';
-import { getPortPosition } from '../utils/canvasUtils';
-import { formatThroughput } from '../utils/formatThroughput';
-
-export const CanvasRenderer = ({
-  canvasRef,
-  blocks,
-  connections,
-  selectedBlocks,
-  selectedConnections,
-  currentConnection,
-  mousePosition,
-  hoveredConnection,
-  hoveredWaypoint,
-  hoveredBlock,
-  hoveredConnectionPoint,
-  draggingWaypoint,
-  blockProcesses,
-  blockMetrics,
-  blockStatus,
-  selectionBox,
-  serverRunning
-}) => {
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw grid
-    ctx.strokeStyle = 'rgba(200, 200, 200, 0.3)';
-    ctx.lineWidth = 1;
-    
-    for (let x = 0; x <= canvas.width; x += GRID_SIZE) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvas.height);
-      ctx.stroke();
-    }
-    
-    for (let y = 0; y <= canvas.height; y += GRID_SIZE) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvas.width, y);
-      ctx.stroke();
-    }
-    
-    // Draw connections
-    connections.forEach(conn => {
-      const fromBlock = blocks.find(b => b.id === conn.fromBlock);
-      const toBlock = blocks.find(b => b.id === conn.toBlock);
-      
-      if (fromBlock && toBlock) {
-        const startPos = getPortPosition(fromBlock, 'output', conn.fromPort);
-        const endPos = getPortPosition(toBlock, 'input', conn.toPort);
-        
-        const isConnectionHovered = hoveredConnection === conn.id;
-        const isConnectionSelected = selectedConnections.find(c => c.id === conn.id);
-        
-        ctx.strokeStyle = isConnectionSelected ? '#f59e0b' : (isConnectionHovered ? '#3b82f6' : '#64748b');
-        ctx.lineWidth = isConnectionSelected ? 5 : (isConnectionHovered ? 4 : 3);
-        ctx.beginPath();
-        
-        const points = [startPos];
-        if (conn.waypoints) points.push(...conn.waypoints);
-        points.push(endPos);
-        
-        ctx.moveTo(points[0].x, points[0].y);
-        
-        if (points.length === 2) {
-          ctx.lineTo(points[1].x, points[1].y);
-        } else {
-          const cornerRadius = 10;
-          
-          for (let i = 0; i < points.length - 1; i++) {
-            const current = points[i];
-            const next = points[i + 1];
-            const hasNextNext = i < points.length - 2;
-            
-            if (!hasNextNext) {
-              ctx.lineTo(next.x, next.y);
-            } else {
-              const nextNext = points[i + 2];
-              
-              const dx1 = next.x - current.x;
-              const dy1 = next.y - current.y;
-              const dist1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
-              
-              const dx2 = nextNext.x - next.x;
-              const dy2 = nextNext.y - next.y;
-              const dist2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-              
-              const actualRadius = Math.min(cornerRadius, dist1 / 2, dist2 / 2);
-              
-              const ratio1 = (dist1 - actualRadius) / dist1;
-              const beforeCornerX = current.x + dx1 * ratio1;
-              const beforeCornerY = current.y + dy1 * ratio1;
-              
-              const ratio2 = actualRadius / dist2;
-              const afterCornerX = next.x + dx2 * ratio2;
-              const afterCornerY = next.y + dy2 * ratio2;
-              
-              ctx.lineTo(beforeCornerX, beforeCornerY);
-              ctx.quadraticCurveTo(next.x, next.y, afterCornerX, afterCornerY);
-            }
-          }
-        }
-        
-        ctx.stroke();
-        
-        const lastPoint = points[points.length - 2] || startPos;
-        const angle = Math.atan2(endPos.y - lastPoint.y, endPos.x - lastPoint.x);
-        const arrowLength = 12;
-        
-        ctx.beginPath();
-        ctx.moveTo(endPos.x, endPos.y);
-        ctx.lineTo(
-          endPos.x - arrowLength * Math.cos(angle - Math.PI / 6),
-          endPos.y - arrowLength * Math.sin(angle - Math.PI / 6)
-        );
-        ctx.moveTo(endPos.x, endPos.y);
-        ctx.lineTo(
-          endPos.x - arrowLength * Math.cos(angle + Math.PI / 6),
-          endPos.y - arrowLength * Math.sin(angle + Math.PI / 6)
-        );
-        ctx.stroke();
-        
-        if (conn.waypoints && conn.waypoints.length > 0) {
-          conn.waypoints.forEach((wp, idx) => {
-            const isThisWaypointHovered = hoveredWaypoint?.connectionId === conn.id && 
-                                         hoveredWaypoint?.waypointIndex === idx;
-            const isThisWaypointDragging = draggingWaypoint?.connectionId === conn.id && 
-                                          draggingWaypoint?.waypointIndex === idx;
-            
-            if (isThisWaypointHovered || isThisWaypointDragging || isConnectionHovered || isConnectionSelected) {
-              if (isThisWaypointHovered || isThisWaypointDragging) {
-                ctx.fillStyle = 'rgba(59, 130, 246, 0.3)';
-                ctx.beginPath();
-                ctx.arc(wp.x, wp.y, 12, 0, Math.PI * 2);
-                ctx.fill();
-              }
-              
-              ctx.fillStyle = isThisWaypointDragging ? '#3b82f6' : (isThisWaypointHovered ? '#60a5fa' : '#94a3b8');
-              ctx.beginPath();
-              ctx.arc(wp.x, wp.y, 8, 0, Math.PI * 2);
-              ctx.fill();
-              
-              ctx.fillStyle = '#ffffff';
-              ctx.beginPath();
-              ctx.arc(wp.x, wp.y, 4, 0, Math.PI * 2);
-              ctx.fill();
-            }
-          });
-        }
-      }
-    });
-    
-    // Draw current connection
-    if (currentConnection) {
-      const fromBlock = blocks.find(b => b.id === currentConnection.fromBlock);
-      if (fromBlock && mousePosition) {
-        const startPos = getPortPosition(fromBlock, 'output', currentConnection.fromPort);
-        
-        ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 3;
-        ctx.setLineDash([5, 5]);
-        ctx.beginPath();
-        ctx.moveTo(startPos.x, startPos.y);
-        
-        currentConnection.waypoints.forEach(wp => {
-          ctx.lineTo(wp.x, wp.y);
-        });
-        
-        ctx.lineTo(mousePosition.x, mousePosition.y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        
-        currentConnection.waypoints.forEach(wp => {
-          ctx.fillStyle = '#3b82f6';
-          ctx.beginPath();
-          ctx.arc(wp.x, wp.y, 8, 0, Math.PI * 2);
-          ctx.fill();
-          
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.arc(wp.x, wp.y, 4, 0, Math.PI * 2);
-          ctx.fill();
-        });
-      }
-    }
-    
-    // Draw selection box
-    if (selectionBox) {
-      ctx.strokeStyle = '#3b82f6';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 5]);
-      ctx.strokeRect(selectionBox.x, selectionBox.y, selectionBox.width, selectionBox.height);
-      ctx.fillStyle = 'rgba(59, 130, 246, 0.1)';
-      ctx.fillRect(selectionBox.x, selectionBox.y, selectionBox.width, selectionBox.height);
-      ctx.setLineDash([]);
-    }
-    
-    // Draw blocks
-    const sortedBlocks = [...blocks].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
-    
-    sortedBlocks.forEach(block => {
-      const radius = 12;
-      const status = blockStatus[block.id];
-      const isRunning = status === 'ready';
-      
-      const isSelected = selectedBlocks.find(b => b.id === block.id);
-      const isHovered = hoveredBlock?.id === block.id;
-      
-      // Draw block background
-      ctx.fillStyle = block.color;
-      ctx.beginPath();
-      ctx.roundRect(block.x, block.y, BLOCK_WIDTH, BLOCK_HEIGHT, radius);
-      ctx.fill();
-      
-      // Draw block border with status color
-      let borderColor = '#1e293b';
-      if (isSelected) {
-        borderColor = '#fbbf24';
-      } else if (status === 'ready') {
-        borderColor = '#10b981';
-      } else if (status === 'initializing' || status === 'starting') {
-        borderColor = '#f59e0b';
-      } else if (status === 'error') {
-        borderColor = '#ef4444';
-      }
-      
-      ctx.strokeStyle = borderColor;
-      ctx.lineWidth = isSelected ? 3 : 2;
-      ctx.stroke();
-      
-      // Draw status indicator
-      if (status) {
-        let indicatorColor;
-        if (status === 'ready') indicatorColor = '#10b981';
-        else if (status === 'initializing' || status === 'starting') indicatorColor = '#f59e0b';
-        else if (status === 'error') indicatorColor = '#ef4444';
-        else if (status === 'stopping') indicatorColor = '#6b7280';
-        
-        if (indicatorColor) {
-          ctx.fillStyle = indicatorColor;
-          ctx.beginPath();
-          ctx.arc(block.x + BLOCK_WIDTH - 10, block.y + 10, 5, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-      
-      // Draw graph indicator
-      if (block.isGraph) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-        ctx.beginPath();
-        ctx.arc(block.x + 10, block.y + 10, 8, 0, Math.PI * 2);
-        ctx.fill();
-        
-        ctx.strokeStyle = '#9333ea';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(block.x + 6, block.y + 13);
-        ctx.lineTo(block.x + 8, block.y + 11);
-        ctx.lineTo(block.x + 10, block.y + 9);
-        ctx.lineTo(block.x + 12, block.y + 7);
-        ctx.lineTo(block.x + 14, block.y + 10);
-        ctx.stroke();
-      }
-      
-      // Draw block text
-      const metrics = blockMetrics[block.id];
-      
-      if (metrics) {
-        // Calculate bps from gbps
-        const bps = metrics.gbps * 1e9;
-        const throughputStr = formatThroughput(bps);
-        
-        const lines = [];
-        lines.push({ text: block.name, font: 'bold 14px sans-serif', color: '#ffffff' });
-        
-        if (metrics.totalFrames) {
-          lines.push({ text: `F:${metrics.frames}/${metrics.totalFrames}`, font: 'bold 10px sans-serif', color: '#ffff00' });
-        } else {
-          lines.push({ text: `F:${metrics.frames}`, font: 'bold 10px sans-serif', color: '#ffff00' });
-        }
-        
-        lines.push({ text: throughputStr, font: 'bold 10px sans-serif', color: '#ffff00' });
-        
-        if (metrics.totalGB !== undefined) {
-          lines.push({ text: `T:${metrics.totalGB.toFixed(2)} GB`, font: 'bold 10px sans-serif', color: '#ffff00' });
-        }
-        
-        const lineHeight = 14;
-        const totalHeight = lines.length * lineHeight;
-        const startY = block.y + (BLOCK_HEIGHT - totalHeight) / 2 + lineHeight / 2;
-        
-        lines.forEach((line, i) => {
-          ctx.fillStyle = line.color;
-          ctx.font = line.font;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(line.text, block.x + BLOCK_WIDTH / 2, startY + i * lineHeight);
-        });
-      } else {
-        const centerY = block.y + BLOCK_HEIGHT / 2;
-        
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 14px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(block.name, block.x + BLOCK_WIDTH / 2, centerY - 8);
-        
-        ctx.font = '11px sans-serif';
-        const infoText = block.isGraph ? `📊 ${block.graphType}` : `In: ${block.inputs} | Out: ${block.outputs}`;
-        ctx.fillText(infoText, block.x + BLOCK_WIDTH / 2, centerY + 8);
-      }
-      
-      // Draw start/stop buttons (top-left corner, bigger, with padding)
-      if (isHovered && serverRunning) {
-        const buttonSize = 20; // Bigger button
-        const padding = 6; // Padding from corner
-        const buttonX = block.x + padding;
-        const buttonY = block.y + padding;
-        
-        if (isRunning) {
-          // Stop button
-          ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
-          ctx.fillRect(buttonX, buttonY, buttonSize, buttonSize);
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(buttonX + 5, buttonY + 5, buttonSize - 10, buttonSize - 10);
-        } else {
-          // Start button
-          ctx.fillStyle = 'rgba(34, 197, 94, 0.9)';
-          ctx.beginPath();
-          ctx.arc(buttonX + buttonSize/2, buttonY + buttonSize/2, buttonSize/2, 0, Math.PI * 2);
-          ctx.fill();
-          
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.moveTo(buttonX + buttonSize/2 - 4, buttonY + buttonSize/2 - 5);
-          ctx.lineTo(buttonX + buttonSize/2 - 4, buttonY + buttonSize/2 + 5);
-          ctx.lineTo(buttonX + buttonSize/2 + 6, buttonY + buttonSize/2);
-          ctx.closePath();
-          ctx.fill();
-        }
-      }
-      
-      // Draw ports
-      const drawPort = (x, y, isInput, isHovered) => {
-        ctx.fillStyle = isHovered ? '#3b82f6' : (isInput ? '#f59e0b' : '#10b981');
-        ctx.beginPath();
-        ctx.arc(block.x + x, block.y + y, 6, 0, Math.PI * 2);
-        ctx.fill();
-        
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(block.x + x, block.y + y, 3, 0, Math.PI * 2);
-        ctx.fill();
-      };
-      
-      block.portPositions.inputs.forEach((port, idx) => {
-        const isHovered = hoveredConnectionPoint?.blockId === block.id && 
-                         hoveredConnectionPoint?.type === 'input' && 
-                         hoveredConnectionPoint?.index === idx;
-        drawPort(port.x, port.y, true, isHovered);
-      });
-      
-      block.portPositions.outputs.forEach((port, idx) => {
-        const isHovered = hoveredConnectionPoint?.blockId === block.id && 
-                         hoveredConnectionPoint?.type === 'output' && 
-                         hoveredConnectionPoint?.index === idx;
-        drawPort(port.x, port.y, false, isHovered);
-      });
-    });
-  }, [
-    blocks,
-    connections,
-    selectedBlocks,
-    selectedConnections,
-    currentConnection,
-    hoveredConnectionPoint,
-    blockProcesses,
-    blockStatus,
-    hoveredWaypoint,
-    draggingWaypoint,
-    hoveredConnection,
-    blockMetrics,
-    selectionBox,
-    mousePosition,
-    hoveredBlock,
-    serverRunning
-  ]);
-
-  return null;
-};
-
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\components\CodeEditorModal.jsx ---
-import React, { useState } from 'react';
-
-export const CodeEditorModal = ({ block, onSave, onClose }) => {
-  const [code, setCode] = useState(block.code);
-
-  return (
-    <div 
-      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" 
-      onClick={onClose}
-    >
-      <div 
-        className="bg-white rounded-lg shadow-2xl w-3/4 h-3/4 flex flex-col" 
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="p-4 border-b border-gray-300 bg-gradient-to-r from-blue-600 to-purple-600 rounded-t-lg">
-          <h3 className="text-xl font-bold text-white">Edit Block Code</h3>
-          <p className="text-sm text-blue-100 mt-1">{block.fileName}</p>
-        </div>
-        
-        <div className="flex-1 p-4 overflow-hidden">
-          <textarea 
-            value={code} 
-            onChange={(e) => setCode(e.target.value)}
-            className="w-full h-full font-mono text-sm p-4 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-            spellCheck={false}
-          />
-        </div>
-        
-        <div className="p-4 border-t border-gray-300 flex gap-3 justify-end bg-gray-50 rounded-b-lg">
-          <button 
-            onClick={onClose}
-            className="px-6 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400 font-medium"
-          >
-            Cancel
-          </button>
-          <button 
-            onClick={() => onSave(code)}
-            className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium"
-          >
-            Save Changes
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\components\GraphWindow.jsx ---
-import React, { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
-
-export const GraphWindow = ({ blockId, blockName, graphType, data, onClose, maxPoints = 15000 }) => {
-  const canvasRef = useRef(null);
-  const [position, setPosition] = useState({ x: 100, y: 100 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  
-  // Rolling buffer for on-the-fly plotting
-  const pointBufferRef = useRef([]);
-  const bufferIndexRef = useRef(0);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-
-    // Clear canvas
-    ctx.clearRect(0, 0, width, height);
-
-    // Draw background
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, width, height);
-
-    // Draw grid
-    ctx.strokeStyle = '#f0f0f0';
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= width; x += 40) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, height);
-      ctx.stroke();
-    }
-    for (let y = 0; y <= height; y += 40) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(width, y);
-      ctx.stroke();
-    }
-
-    if (!data.xData || data.xData.length === 0) {
-      ctx.fillStyle = '#666';
-      ctx.font = '16px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('Waiting for data...', width / 2, height / 2);
-      return;
-    }
-
-    // Calculate plot area
-    const padding = { left: 60, right: 40, top: 40, bottom: 60 };
-    const plotWidth = width - padding.left - padding.right;
-    const plotHeight = height - padding.top - padding.bottom;
-
-    // Different rendering for scatter (constellation) vs line plots
-    if (graphType === 'scatter') {
-      // CONSTELLATION DIAGRAM - centered axes at (0,0)
-      // ON-THE-FLY PLOTTING with rolling window
-      
-      // Add new points to rolling buffer
-      for (let i = 0; i < data.xData.length; i++) {
-        const newPoint = { x: data.xData[i], y: data.yData[i] };
-        
-        if (pointBufferRef.current.length < maxPoints) {
-          // Buffer not full - just append
-          pointBufferRef.current.push(newPoint);
-        } else {
-          // Buffer full - replace oldest (circular buffer)
-          pointBufferRef.current[bufferIndexRef.current] = newPoint;
-          bufferIndexRef.current = (bufferIndexRef.current + 1) % maxPoints;
-        }
-      }
-      
-      // Use buffered points for rendering
-      const points = pointBufferRef.current;
-      
-      if (points.length === 0) {
-        ctx.fillStyle = '#666';
-        ctx.font = '16px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Accumulating points...', width / 2, height / 2);
-        return;
-      }
-      
-      // Find max absolute value for symmetric axes
-      const maxAbsX = Math.max(...points.map(p => Math.abs(p.x)));
-      const maxAbsY = Math.max(...points.map(p => Math.abs(p.y)));
-      const maxAbs = Math.max(maxAbsX, maxAbsY) || 1;
-      
-      // Add 10% padding
-      const axisRange = maxAbs * 1.5;
-      
-      // Center of plot area
-      const centerX = padding.left + plotWidth / 2;
-      const centerY = padding.top + plotHeight / 2;
-      
-      // Scale factor: pixels per unit
-      const scale = Math.min(plotWidth, plotHeight) / (2 * axisRange);
-      
-      const xScale = (x) => centerX + x * scale;
-      const yScale = (y) => centerY - y * scale;
-      
-      // Draw grid lines
-      ctx.strokeStyle = '#e0e0e0';
-      ctx.lineWidth = 1;
-      const gridStep = axisRange / 5;
-      
-      for (let i = -5; i <= 5; i++) {
-        const val = i * gridStep;
-        const screenX = xScale(val);
-        const screenY = yScale(val);
-        
-        // Vertical grid lines
-        ctx.beginPath();
-        ctx.moveTo(screenX, padding.top);
-        ctx.lineTo(screenX, height - padding.bottom);
-        ctx.stroke();
-        
-        // Horizontal grid lines
-        ctx.beginPath();
-        ctx.moveTo(padding.left, screenY);
-        ctx.lineTo(width - padding.right, screenY);
-        ctx.stroke();
-      }
-      
-      // Draw CENTER axes (I and Q)
-      ctx.strokeStyle = '#333';
-      ctx.lineWidth = 2;
-      
-      // Horizontal axis (I-axis)
-      ctx.beginPath();
-      ctx.moveTo(padding.left, centerY);
-      ctx.lineTo(width - padding.right, centerY);
-      ctx.stroke();
-      
-      // Vertical axis (Q-axis)
-      ctx.beginPath();
-      ctx.moveTo(centerX, padding.top);
-      ctx.lineTo(centerX, height - padding.bottom);
-      ctx.stroke();
-      
-      // Draw axis labels
-      ctx.fillStyle = '#333';
-      ctx.font = '12px sans-serif';
-      ctx.textAlign = 'center';
-      
-      // I-axis label (bottom)
-      ctx.fillText('In-phase (I)', width / 2, height - 10);
-      
-      // Q-axis label (left side, rotated)
-      ctx.save();
-      ctx.translate(15, height / 2);
-      ctx.rotate(-Math.PI / 2);
-      ctx.fillText('Quadrature (Q)', 0, 0);
-      ctx.restore();
-      
-      // Draw tick marks and values
-      ctx.font = '10px sans-serif';
-      
-      for (let i = -5; i <= 5; i++) {
-        const val = i * gridStep;
-        const screenX = xScale(val);
-        const screenY = yScale(val);
-        
-        // Skip center ticks (would overlap with axes)
-        if (i !== 0) {
-          // X-axis ticks
-          ctx.strokeStyle = '#333';
-          ctx.beginPath();
-          ctx.moveTo(screenX, centerY - 5);
-          ctx.lineTo(screenX, centerY + 5);
-          ctx.stroke();
-          
-          ctx.fillStyle = '#333';
-          ctx.textAlign = 'center';
-          ctx.fillText(val.toFixed(1), screenX, centerY + 18);
-          
-          // Y-axis ticks
-          ctx.strokeStyle = '#333';
-          ctx.beginPath();
-          ctx.moveTo(centerX - 5, screenY);
-          ctx.lineTo(centerX + 5, screenY);
-          ctx.stroke();
-          
-          ctx.fillStyle = '#333';
-          ctx.textAlign = 'right';
-          ctx.fillText(val.toFixed(1), centerX - 8, screenY + 4);
-        }
-      }
-      
-      // Draw origin marker
-      ctx.fillStyle = '#333';
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
-      ctx.fill();
-      
-      // Draw constellation points from rolling buffer
-      ctx.fillStyle = 'rgba(59, 130, 246, 0.6)';
-      points.forEach(point => {
-        const screenX = xScale(point.x);
-        const screenY = yScale(point.y);
-        
-        ctx.beginPath();
-        ctx.arc(screenX, screenY, 2, 0, Math.PI * 2);
-        ctx.fill();
-      });
-      
-      // Draw info text
-      ctx.fillStyle = '#666';
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText(`Points: ${points.length}/${maxPoints}`, width - 10, 25);
-      
-    } else if (graphType === 'line') {
-      // LINE PLOT - traditional axes at bottom/left
-      
-      // Find data ranges
-      const xMin = Math.min(...data.xData);
-      const xMax = Math.max(...data.xData);
-      const yMin = Math.min(...data.yData);
-      const yMax = Math.max(...data.yData);
-
-      // Add padding to ranges
-      const xRange = xMax - xMin || 1;
-      const yRange = yMax - yMin || 1;
-      const xPadding = xRange * 0.1;
-      const yPadding = yRange * 0.1;
-
-      const xScale = (x) => padding.left + ((x - (xMin - xPadding)) / (xRange + 2 * xPadding)) * plotWidth;
-      const yScale = (y) => height - padding.bottom - ((y - (yMin - yPadding)) / (yRange + 2 * yPadding)) * plotHeight;
-
-      // Draw axes
-      ctx.strokeStyle = '#333';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(padding.left, height - padding.bottom);
-      ctx.lineTo(width - padding.right, height - padding.bottom);
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(padding.left, padding.top);
-      ctx.lineTo(padding.left, height - padding.bottom);
-      ctx.stroke();
-
-      // Draw axis labels
-      ctx.fillStyle = '#333';
-      ctx.font = '12px sans-serif';
-      ctx.textAlign = 'center';
-      
-      // X-axis label
-      ctx.fillText('Time (samples)', width / 2, height - 10);
-      
-      // Y-axis label
-      ctx.save();
-      ctx.translate(15, height / 2);
-      ctx.rotate(-Math.PI / 2);
-      ctx.fillText('Speed (rad/s)', 0, 0);
-      ctx.restore();
-
-      // Draw tick marks and values
-      ctx.font = '10px sans-serif';
-      const numTicks = 5;
-      
-      // X-axis ticks
-      for (let i = 0; i <= numTicks; i++) {
-        const x = xMin - xPadding + ((xRange + 2 * xPadding) * i) / numTicks;
-        const screenX = xScale(x);
-        
-        ctx.strokeStyle = '#333';
-        ctx.beginPath();
-        ctx.moveTo(screenX, height - padding.bottom);
-        ctx.lineTo(screenX, height - padding.bottom + 5);
-        ctx.stroke();
-        
-        ctx.fillStyle = '#333';
-        ctx.textAlign = 'center';
-        ctx.fillText(x.toFixed(0), screenX, height - padding.bottom + 18);
-      }
-
-      // Y-axis ticks
-      for (let i = 0; i <= numTicks; i++) {
-        const y = yMin - yPadding + ((yRange + 2 * yPadding) * i) / numTicks;
-        const screenY = yScale(y);
-        
-        ctx.strokeStyle = '#333';
-        ctx.beginPath();
-        ctx.moveTo(padding.left - 5, screenY);
-        ctx.lineTo(padding.left, screenY);
-        ctx.stroke();
-        
-        ctx.fillStyle = '#333';
-        ctx.textAlign = 'right';
-        ctx.fillText(y.toFixed(1), padding.left - 8, screenY + 4);
-      }
-      
-      // Draw line plot with TWO series (reference and measured)
-      const combined = data.xData.map((x, i) => ({ x, y: data.yData[i] }));
-      
-      // Separate into reference and measured based on x value pattern
-      const refData = [];
-      const measData = [];
-      
-      combined.forEach(point => {
-        if (Math.abs(point.x - Math.round(point.x)) < 0.01) {
-          refData.push(point);
-        } else {
-          measData.push({ x: Math.round(point.x - 0.1), y: point.y });
-        }
-      });
-      
-      // Draw reference speed (blue line)
-      if (refData.length > 0) {
-        ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        
-        refData.forEach((point, i) => {
-          const screenX = xScale(point.x);
-          const screenY = yScale(point.y);
-          
-          if (i === 0) {
-            ctx.moveTo(screenX, screenY);
-          } else {
-            ctx.lineTo(screenX, screenY);
-          }
-        });
-        ctx.stroke();
-      }
-      
-      // Draw measured speed (green line)
-      if (measData.length > 0) {
-        ctx.strokeStyle = '#10b981';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5, 3]);
-        ctx.beginPath();
-        
-        measData.forEach((point, i) => {
-          const screenX = xScale(point.x);
-          const screenY = yScale(point.y);
-          
-          if (i === 0) {
-            ctx.moveTo(screenX, screenY);
-          } else {
-            ctx.lineTo(screenX, screenY);
-          }
-        });
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      
-      // Draw legend
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'left';
-      
-      ctx.fillStyle = '#3b82f6';
-      ctx.fillRect(width - 150, 20, 20, 3);
-      ctx.fillStyle = '#333';
-      ctx.fillText('Reference Speed', width - 125, 25);
-      
-      ctx.strokeStyle = '#10b981';
-      ctx.lineWidth = 3;
-      ctx.setLineDash([5, 3]);
-      ctx.beginPath();
-      ctx.moveTo(width - 150, 40);
-      ctx.lineTo(width - 130, 40);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = '#333';
-      ctx.fillText('Measured Speed', width - 125, 43);
-      
-      // Draw info text
-      ctx.fillStyle = '#666';
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText(`Points: ${data.xData.length}`, width - 10, height - padding.bottom + 35);
-    }
-
-  }, [data, graphType, maxPoints]);
-
-  const handleMouseDown = (e) => {
-    if (e.target.closest('.graph-close-button')) return;
-    setIsDragging(true);
-    setDragOffset({
-      x: e.clientX - position.x,
-      y: e.clientY - position.y
-    });
-  };
-
-  const handleMouseMove = (e) => {
-    if (isDragging) {
-      setPosition({
-        x: e.clientX - dragOffset.x,
-        y: e.clientY - dragOffset.y
-      });
-    }
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  useEffect(() => {
-    if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-      return () => {
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', handleMouseUp);
-      };
-    }
-  }, [isDragging, dragOffset]);
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        left: position.x,
-        top: position.y,
-        zIndex: 1000,
-        background: 'white',
-        borderRadius: '8px',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-        cursor: isDragging ? 'grabbing' : 'grab'
-      }}
-      onMouseDown={handleMouseDown}
-    >
-      <div className="flex items-center justify-between p-2 bg-gradient-to-r from-purple-600 to-blue-600 rounded-t-lg">
-        <h3 className="text-white font-semibold text-sm">
-          📊 {blockName} - {graphType}
-        </h3>
-        <button
-          className="graph-close-button text-white hover:text-gray-200 p-1"
-          onClick={onClose}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <X size={16} />
-        </button>
-      </div>
-      <div className="p-2">
-        <canvas
-          ref={canvasRef}
-          width={600}
-          height={400}
-          style={{ border: '1px solid #ddd', borderRadius: '4px' }}
-        />
-      </div>
-    </div>
-  );
-};
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\components\Sidebar.jsx ---
-import React from 'react';
-import { FileCode, Trash2, Wifi, WifiOff } from 'lucide-react';
-
-export const Sidebar = ({ 
-  sidebarMode,
-  selectedBlocks,
-  blocks,
-  connections,
-  serverRunning,
-  blockProcesses,
-  executionLog,
-  socketConnected,
-  instanceConfig,
-  onEditCode,
-  onDelete,
-  onBlockColorChange,
-  onKillProcess,
-  onClearLog
-}) => {
-  return (
-    <div className="w-96 bg-white border-r border-gray-300 flex flex-col flex-shrink-0">
-      <div className="p-4 border-b border-gray-300 bg-gradient-to-r from-blue-600 to-purple-600">
-        <h2 className="text-xl font-bold text-white">Pipeline System Designer</h2>
-        <p className="text-sm text-blue-100 mt-1">Block Diagram Editor</p>
-        {instanceConfig && (
-          <div className="mt-2 text-xs text-blue-50 font-mono">
-            <div>Instance: {instanceConfig.instanceId.substring(0, 16)}...</div>
-            <div>Server Port: {instanceConfig.serverPort}</div>
-          </div>
-        )}
-      </div>
-      
-      <div className="flex-1 overflow-auto p-4">
-        {sidebarMode === 'config' && selectedBlocks.length > 0 && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-lg text-gray-800">
-                {selectedBlocks.length === 1 ? 'Block Configuration' : `${selectedBlocks.length} Blocks Selected`}
-              </h3>
-              {selectedBlocks.length === 1 && (
-                <button onClick={() => onEditCode(selectedBlocks[0])} className="text-blue-600 hover:text-blue-800">
-                  <FileCode size={20} />
-                </button>
-              )}
-            </div>
-            
-            {selectedBlocks.length === 1 && (
-              <div className="bg-gray-50 rounded-lg p-4 space-y-3">
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Name</label>
-                  <p className="text-base font-semibold text-gray-900">{selectedBlocks[0].name}</p>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Inputs</label>
-                    <p className="text-base font-semibold text-gray-900">{selectedBlocks[0].inputs}</p>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Outputs</label>
-                    <p className="text-base font-semibold text-gray-900">{selectedBlocks[0].outputs}</p>
-                  </div>
-                </div>
-                
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Color</label>
-                  <div className="flex items-center gap-2 mt-1">
-                    <div className="w-8 h-8 rounded border-2 border-gray-300" style={{ backgroundColor: selectedBlocks[0].color }} />
-                    <input 
-                      type="color" 
-                      value={selectedBlocks[0].color} 
-                      onChange={(e) => onBlockColorChange(selectedBlocks[0], e.target.value)}
-                      className="cursor-pointer" 
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-            
-            <button 
-              onClick={onDelete} 
-              className="w-full bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 font-medium flex items-center justify-center gap-2"
-            >
-              <Trash2 size={16} />
-              Delete {selectedBlocks.length > 1 ? `${selectedBlocks.length} Blocks` : 'Block'} (Del)
-            </button>
-          </div>
-        )}
-        
-        {(!sidebarMode || sidebarMode !== 'config') && (
-          <>
-            {/* System Status */}
-            <div className="mb-4">
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">System Status</h3>
-              <div className="bg-gray-50 rounded-lg p-3 space-y-2 text-sm">
-                {instanceConfig && (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-gray-700">Instance ID:</span>
-                      <span className="font-mono text-xs text-gray-900" title={instanceConfig.instanceId}>
-                        {instanceConfig.instanceId.substring(0, 12)}...
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-700">Server Port:</span>
-                      <span className="font-semibold text-gray-900">{instanceConfig.serverPort}</span>
-                    </div>
-                    <div className="border-t border-gray-200 my-2"></div>
-                  </>
-                )}
-                <div className="flex justify-between">
-                  <span className="text-gray-700">Blocks:</span>
-                  <span className="font-semibold text-gray-900">{blocks.length}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-700">Connections:</span>
-                  <span className="font-semibold text-gray-900">{connections.length}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-700">Server:</span>
-                  <span className={`font-semibold ${serverRunning ? 'text-green-600' : 'text-red-600'}`}>
-                    {serverRunning ? 'Running' : 'Stopped'}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-700">Socket:</span>
-                  <div className="flex items-center gap-2">
-                    {socketConnected ? (
-                      <>
-                        <Wifi size={16} className="text-green-600" />
-                        <span className="font-semibold text-green-600">Connected</span>
-                      </>
-                    ) : (
-                      <>
-                        <WifiOff size={16} className="text-gray-400" />
-                        <span className="font-semibold text-gray-400">Disconnected</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-700">Active Processes:</span>
-                  <span className="font-semibold text-gray-900">{Object.keys(blockProcesses).length}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Active Processes List */}
-            {Object.keys(blockProcesses).length > 0 && (
-              <div className="mb-4">
-                <h3 className="font-semibold text-lg text-gray-800 mb-2">Active Processes</h3>
-                <div className="bg-gray-50 rounded-lg p-3 space-y-2 text-xs max-h-40 overflow-y-auto">
-                  {Object.entries(blockProcesses).map(([key, proc]) => (
-                    <div key={key} className="flex justify-between items-center p-2 bg-white rounded border border-gray-200">
-                      <div>
-                        <div className="font-semibold text-gray-900">{proc.name}</div>
-                        <div className="text-gray-500">PID: {proc.pid}</div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${proc.status === 'running' ? 'bg-green-500' : 'bg-gray-400'}`} />
-                        <button
-                          onClick={() => onKillProcess(proc.pid, proc.name)}
-                          className="text-red-600 hover:text-red-800"
-                          title="Kill process"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-      
-      {/* Execution Log */}
-      <div className="border-t border-gray-300 p-4">
-        <div className="flex justify-between items-center mb-2">
-          <h3 className="font-semibold text-sm text-gray-800">Execution Log</h3>
-          <button
-            onClick={onClearLog}
-            className="text-xs text-gray-600 hover:text-gray-800"
-            title="Clear log"
-          >
-            Clear
-          </button>
-        </div>
-        <div className="bg-gray-900 rounded-lg p-3 h-64 overflow-y-auto space-y-1 text-[10px] font-mono">
-          {executionLog.slice(-50).map((log, idx) => (
-            <div key={idx} className={`
-              ${log.type === 'error' ? 'text-red-400' : ''}
-              ${log.type === 'warning' ? 'text-yellow-400' : ''}
-              ${log.type === 'success' ? 'text-green-400' : ''}
-              ${log.type === 'info' ? 'text-blue-400' : 'text-gray-400'}
-            `}>
-              <span className="text-gray-500">[{log.time}]</span> {log.message}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-};
-
---- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\components\Toolbar.jsx ---
-import React from 'react';
-import { Upload, Play, Square, Save, FolderOpen } from 'lucide-react';
-
-export const Toolbar = ({ 
-  onStart, 
-  onStopAll,
-  onImport,
-  onLoad,
-  onSave,
-  serverRunning,
-  isStarting,
-  hasProcesses
-}) => {
-  return (
-    <div className="bg-white border-b border-gray-300 p-3 flex gap-2 items-center overflow-x-auto">
-      <button 
-        onClick={onStart} 
-        disabled={serverRunning || isStarting}
-        className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 font-medium disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
-      >
-        <Play size={18} />
-        {isStarting ? 'Starting...' : 'Start'}
-      </button>
-      
-      <button 
-        onClick={onStopAll} 
-        disabled={!hasProcesses}
-        className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 font-medium disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
-      >
-        <Square size={18} />
-        Stop All
-      </button>
-      
-      <div className="w-px h-8 bg-gray-300 mx-1"></div>
-      
-      <button 
-        onClick={onImport}
-        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium flex items-center gap-2 whitespace-nowrap"
-      >
-        <Upload size={18} />
-        Import
-      </button>
-      
-      <button 
-        onClick={onLoad}
-        className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 font-medium flex items-center gap-2 whitespace-nowrap"
-      >
-        <FolderOpen size={18} />
-        Load
-      </button>
-      
-      <button 
-        onClick={onSave} 
-        className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 font-medium flex items-center gap-2 whitespace-nowrap"
-      >
-        <Save size={18} />
-        Save
-      </button>
-    </div>
-  );
-};
 
 --- FILE: C:\Users\amrga\Downloads\final\pipeline-editor\src\hooks\useCanvasHandlers.js ---
 import { useState } from 'react';
@@ -11768,5 +7931,3 @@ export const parseGraphData = (dataStr) => {
   if (parts.length === 2) return { x: parseFloat(parts[0]), y: parseFloat(parts[1]) };
   return null;
 };
-
-

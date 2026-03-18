@@ -185,9 +185,9 @@ int main(int argc, char* argv[]) {
         3,                          // inputs
         2,                          // outputs
         {3030, 3, 3},               // inputPacketSizes  [INT_DATA, rate_enc_len, feedback]
-        {6000, 6000, 6000},         // inputBatchSizes
+        {64, 64, 64},         // inputBatchSizes
         {3027, 6},                  // outputPacketSizes [rate+lip+DATA_INT(3027), SIGNAL_INT(6)]
-        {6000, 6000},               // outputBatchSizes
+        {64, 64},               // outputBatchSizes
         false,                      // ltr (middleman)
         true,                       // startWithAll
         "Interleaver middleman: SIGNAL_INT first; rate+lip(enc_len)+DATA_INT second"

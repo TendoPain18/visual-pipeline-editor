@@ -230,9 +230,9 @@ int main(int argc, char* argv[]) {
         2,                 // inputs
         2,                 // outputs
         {3027, 6},         // inputPacketSizes  [rate+lip+DATA_INT(3027), SIGNAL_INT(6)]
-        {6000, 6000},      // inputBatchSizes
+        {64, 64},      // inputBatchSizes
         {3027, 6},         // outputPacketSizes [rate+lip+DATA_DEINT(3027), SIGNAL(6)]
-        {6000, 6000},      // outputBatchSizes
+        {64, 64},      // outputBatchSizes
         true,              // ltr
         true,              // startWithAll
         "Deinterleaver: SIGNAL deint+sent first; DATA deint up to lip bytes; rate+lip passed through"

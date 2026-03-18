@@ -5,51 +5,41 @@
 #include <cstdio>
 
 // ============================================================
-// IEEE 802.11a QAM Demapper (Frequency Domain)
-//
-// Receives the output of batch_fft (preamble already stripped).
-// First block in each packet = SIGNAL symbol.
+// IEEE 802.11a QAM Demapper
 //
 // Inputs:
-//   in[0]: Stacked freq-domain IQ blocks from batch_fft (129024 bytes/pkt)
-//             504 blocks x 256 bytes each
-//             Block 0   = SIGNAL (BPSK)
-//             Blocks 1+ = DATA
-//   in[1]: Feedback from ppdu_decapsulate             (3 bytes/pkt)
+//   in[0]: Stacked IQ symbols from qam_mapper   (129024 bytes/pkt)  <- FIRST
+//   in[1]: Feedback from ppdu_decapsulate        (3 bytes/pkt)
 //             Byte 0: rate_value
 //             Byte 1: mac_len_lo
 //             Byte 2: mac_len_hi
 //
 // Outputs:
-//   out[0]: rate + lip + DATA_INTERLEAVED              (3027 bytes/pkt)
+//   out[0]: rate + lip + DATA_INTERLEAVED        (3027 bytes/pkt)    <- FIRST
 //             Byte 0: rate_value
 //             Byte 1: lip_lo
 //             Byte 2: lip_hi
 //             Bytes [3..3+lip-1]: interleaved DATA bits repacked to bytes
-//   out[1]: SIGNAL_INTERLEAVED                         (6 bytes/pkt)
+//   out[1]: SIGNAL_INTERLEAVED                   (6 bytes/pkt)
 //
 // Protocol (deadlock-free):
-//   1. Read IQ freq-domain data (in[0])
-//   2. Demap SIGNAL block (block 0) -> send SIGNAL_INTERLEAVED (out[1])
+//   1. Read IQ data (in[0])
+//   2. Demap SIGNAL symbol -> send SIGNAL_INTERLEAVED (out[1])
 //   3. Wait for feedback (in[1]) -> extract rate + mac_length
 //   4. Recompute N_SYM from mac_length + rate
-//   5. Demap DATA blocks -> send rate+lip+DATA_INTERLEAVED (out[0])
-//
-// Subcarrier layout (64-point FFT, index -32..+31 -> array [0..63]):
-//   Data:   [-26:-22, -20:-8, -6:-1, 1:6, 8:20, 22:26]  = 48 subcarriers
-//   Pilots: [-21, -7, 7, 21]                              = 4 subcarriers (ignored)
+//   5. Demap DATA symbols -> send rate+lip+DATA_INTERLEAVED (out[0])
 //
 // int8 pipe convention: stored byte B -> pipe int8_t = int8_t(uint8_t(B) - 128)
 // ============================================================
 
 // -----------------------------------------------------------------------
-// Constants
+// Constants (must match qam_mapper.cpp)
 // -----------------------------------------------------------------------
-static const int MAX_SYMBOLS      = 504;
-static const int SUBCARRIERS      = 64;
-static const int BYTES_PER_BLOCK  = SUBCARRIERS * 4;               // 256
-static const int IN_IQ_PKT_SIZE   = MAX_SYMBOLS * BYTES_PER_BLOCK; // 129024
-static const int BATCH_SIZE       = 64;
+static const int MAX_SYMBOLS    = 504;
+static const int SUBCARRIERS    = 64;
+static const int BYTES_PER_SYM  = SUBCARRIERS * 4;             // 256
+static const int IN_IQ_PKT_SIZE = MAX_SYMBOLS * BYTES_PER_SYM; // 129024
+static const int BATCH_SIZE     = 64;
 
 // -----------------------------------------------------------------------
 // Rate parameters
@@ -90,7 +80,7 @@ static void buildSubcarrierMap() {
 }
 
 // -----------------------------------------------------------------------
-// Unpack one IQ pair from 4 pipe bytes -> double
+// Unpack one IQ pair from 4 pipe bytes
 // -----------------------------------------------------------------------
 static void unpackIQ(const int8_t* src, double& I, double& Q) {
     uint8_t iLo = (uint8_t)((int32_t)src[0] + 128);
@@ -104,7 +94,7 @@ static void unpackIQ(const int8_t* src, double& I, double& Q) {
 // -----------------------------------------------------------------------
 // Hard-decision demappers
 //
-// 64-QAM Gray code axis (b0=MSB): inverse of mapper.
+// 64-QAM Gray code axis (b0=MSB): inverse of qam64Axis() in mapper.
 //   000->-7, 001->-5, 011->-3, 010->-1, 110->+1, 111->+3, 101->+5, 100->+7
 // -----------------------------------------------------------------------
 
@@ -118,7 +108,7 @@ static void demapQPSK(double I, double Q, uint8_t* bits) {
 }
 
 static void demapQAM16Axis(double val, uint8_t& b0, uint8_t& b1) {
-    double x = val * 3.0; // back to raw {-3,-1,+1,+3}
+    double x = val * 3.0;
     if      (x < -2.0) { b0 = 0; b1 = 0; }
     else if (x <  0.0) { b0 = 0; b1 = 1; }
     else if (x <  2.0) { b0 = 1; b1 = 1; }
@@ -130,7 +120,7 @@ static void demap16QAM(double I, double Q, uint8_t* bits) {
 }
 
 static void demapQAM64Axis(double val, uint8_t& b0, uint8_t& b1, uint8_t& b2) {
-    double x = val * 7.0; // back to raw {-7,-5,-3,-1,+1,+3,+5,+7}
+    double x = val * 7.0;
     if      (x < -6.0) { b0=0; b1=0; b2=0; }
     else if (x < -4.0) { b0=0; b1=0; b2=1; }
     else if (x < -2.0) { b0=0; b1=1; b2=1; }
@@ -156,12 +146,12 @@ static void demapSymbol(double I, double Q, int NBPSC, uint8_t* bits) {
 }
 
 // -----------------------------------------------------------------------
-// Extract NCBPS bits from one OFDM frequency block
+// Extract NCBPS bits from one OFDM symbol
 // -----------------------------------------------------------------------
-static void readOfdmBlock(const int8_t* blockBuf, uint8_t* bits, int NBPSC) {
+static void readOfdmSymbol(const int8_t* symBuf, uint8_t* bits, int NBPSC) {
     for (int sc = 0; sc < 48; sc++) {
         double I, Q;
-        unpackIQ(blockBuf + g_dataSubcarriers[sc] * 4, I, Q);
+        unpackIQ(symBuf + g_dataSubcarriers[sc] * 4, I, Q);
         demapSymbol(I, Q, NBPSC, bits + sc * NBPSC);
     }
 }
@@ -212,24 +202,22 @@ void process_qam_demapper(
     const int outDataPkt = config.outputPacketSizes[0];
     const int outSigPkt  = config.outputPacketSizes[1];
 
-    // ===== STEP 1: Read IQ frequency-domain blocks =====
+    // ===== STEP 1: Read IQ =====
     int actualCount = inIQ.read(iqBuf);
 
     memset(signalBuf,  0x80, outSignal.getBufferSize());
     memset(dataOutBuf, 0x80, outData.getBufferSize());
 
-    // ===== STEP 2: Demap SIGNAL block (block 0) for every packet =====
+    // ===== STEP 2: Demap SIGNAL symbol for every packet =====
     for (int i = 0; i < actualCount; i++) {
         const int iqOff  = i * inIQPkt;
         const int sigOff = i * outSigPkt;
 
-        // Block 0 in the stripped stack IS the SIGNAL block
-        const int8_t* sigBlock = iqBuf + iqOff;
+        const int8_t* sym0 = iqBuf + iqOff;
 
         uint8_t signalBits[48];
-        readOfdmBlock(sigBlock, signalBits, 1);  // BPSK -> 48 bits
+        readOfdmSymbol(sym0, signalBits, 1);  // BPSK
 
-        // Repack 48 bits into 6 bytes
         for (int b = 0; b < 6; b++) {
             uint8_t byte = 0;
             for (int bit = 0; bit < 8; bit++)
@@ -244,7 +232,7 @@ void process_qam_demapper(
     // ===== STEP 4: Wait for feedback =====
     inFeedback.read(feedbackBuf);
 
-    // ===== STEP 5+6+7: Demap DATA blocks =====
+    // ===== STEP 5+6+7: Demap DATA symbols =====
     for (int i = 0; i < actualCount; i++) {
         const int iqOff   = i * inIQPkt;
         const int fbOff   = i * inFbPkt;
@@ -265,11 +253,9 @@ void process_qam_demapper(
         int totalDataBits = N_SYM * rp.NCBPS;
         uint8_t* dataBits = new uint8_t[totalDataBits]();
 
-        // DATA blocks start at block index 1 (block 0 = SIGNAL)
-        for (int sym = 0; sym < N_SYM; sym++) {
-            readOfdmBlock(iqBuf + iqOff + (sym + 1) * BYTES_PER_BLOCK,
-                          dataBits + sym * rp.NCBPS, rp.NBPSC);
-        }
+        for (int sym = 0; sym < N_SYM; sym++)
+            readOfdmSymbol(iqBuf + iqOff + (sym + 1) * BYTES_PER_SYM,
+                           dataBits + sym * rp.NCBPS, rp.NBPSC);
 
         int dataBytes = totalDataBits / 8;
         if (dataBytes > lip) dataBytes = lip;
@@ -312,14 +298,13 @@ int main(int argc, char* argv[]) {
         "QamDemapper",
         2,              // inputs
         2,              // outputs
-        {129024, 3},    // inputPacketSizes  [504 freq blocks * 256 bytes, feedback]
+        {129024, 3},    // inputPacketSizes  [IQ stacked: 504*256, feedback]
         {64, 64},       // inputBatchSizes
         {3027, 6},      // outputPacketSizes [rate+lip+DATA_INT, SIGNAL_INT]
         {64, 64},       // outputBatchSizes
         false,          // ltr
         true,           // startWithAll
-        "IEEE 802.11a QAM Demapper: freq-domain IQ blocks -> interleaved bits; "
-        "SIGNAL first for feedback; receives preamble-stripped FFT output"
+        "IEEE 802.11a QAM Demapper: IQ symbols -> interleaved bits; SIGNAL first for feedback"
     };
 
     run_manual_block(pipeIns, pipeOuts, config, process_qam_demapper, init_qam_demapper);

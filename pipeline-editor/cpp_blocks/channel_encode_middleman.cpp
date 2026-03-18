@@ -191,9 +191,9 @@ int main(int argc, char* argv[]) {
         3,                          // inputs
         2,                          // outputs
         {3030, 3, 3},               // inputPacketSizes  [ENC_DATA, rate_enc_len, feedback]
-        {6000, 6000, 6000},         // inputBatchSizes
+        {64, 64, 64},         // inputBatchSizes
         {3027, 6},                  // outputPacketSizes [rate+lip+DATA_ENC(3027), SIGNAL_ENC(6)]
-        {6000, 6000},               // outputBatchSizes
+        {64, 64},               // outputBatchSizes
         false,                      // ltr (middleman)
         true,                       // startWithAll
         "Channel encoder middleman: SIGNAL_ENC first; rate+lip(enc_len-6)+DATA_ENC second"

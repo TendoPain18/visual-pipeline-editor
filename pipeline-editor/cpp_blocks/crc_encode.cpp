@@ -100,9 +100,9 @@ int main(int argc, char* argv[]) {
         1,                  // inputs
         1,                  // outputs
         {1500},             // inputPacketSizes
-        {6000},            // inputBatchSizes
+        {64},            // inputBatchSizes
         {1504},             // outputPacketSizes
-        {6000},            // outputBatchSizes
+        {64},            // outputBatchSizes
         true,               // ltr
         true,               // startWithAll (AUTO-START)
         "CRC-32 encoder (ITU-T V.42) - batch processing"  // description

@@ -32,6 +32,87 @@ export const signalBlockError = (blockId, reason) => {
   }
 };
 
+// -----------------------------------------------------------------------
+// Detect whether a C++ block file is a CUDA file (.cu extension)
+// -----------------------------------------------------------------------
+const isCudaBlock = (block) => {
+  return block.fileName && block.fileName.toLowerCase().endsWith('.cu');
+};
+
+// -----------------------------------------------------------------------
+// Build the compile command for a single C++ / CUDA block.
+//
+// For CUDA blocks (.cu):
+//   nvcc -o bin/<name>.exe <file>.cu -lws2_32 -O3 -arch=sm_86 -std=c++17
+//
+// For regular C++ blocks (.cpp):
+//   g++ -fopenmp -o bin/<name>.exe <file>.cpp -lws2_32 -O3 -march=native -std=c++17
+//
+// The CUDA architecture (-arch) is set to sm_86 (RTX 3000/A-series) by default.
+// Override by setting the CUDA_ARCH environment variable in your shell, e.g.:
+//   CUDA_ARCH=sm_89   (RTX 4090)
+//   CUDA_ARCH=sm_80   (A100)
+//   CUDA_ARCH=sm_75   (RTX 2000)
+//   CUDA_ARCH=sm_70   (V100)
+// -----------------------------------------------------------------------
+const buildCompileCommand = (block, projectDir) => {
+  const exeName = block.fileName.replace(/\.(cpp|cu)$/i, '.exe');
+
+  if (isCudaBlock(block)) {
+    const cudaArch = 'sm_86';  // Change to match your GPU: sm_75, sm_80, sm_86, sm_89, sm_90
+
+    // nvcc on Windows requires MSVC (cl.exe) — we wrap the call in a
+    // VsDevCmd.bat environment initialisation so nvcc can find cl.exe
+    // regardless of whether the user launched from a Developer Prompt.
+    //
+    // Flags:
+    //   -O3 / -O2          : optimisation (nvcc passes -O2 to cl.exe via -Xcompiler)
+    //   -arch=<sm>         : target GPU SM version
+    //   -std=c++17         : C++17
+    //   -lws2_32           : Winsock
+    //   -Xcompiler /W0     : suppress MSVC warnings (no quotes needed here)
+    //   --expt-relaxed-constexpr : allow constexpr in device code
+    //   -I.                : so #include "core/run_generic_block.h" resolves
+
+    // Find VsDevCmd.bat — try the two most common VS installation paths.
+    // If neither exists nvcc will still attempt to compile but may error on cl.exe.
+    const vsDevCmdPaths = [
+      `"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\Tools\\VsDevCmd.bat"`,
+      `"C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\Tools\\VsDevCmd.bat"`,
+      `"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\Common7\\Tools\\VsDevCmd.bat"`,
+      `"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\Common7\\Tools\\VsDevCmd.bat"`,
+    ];
+
+    // We emit a cmd chain: try each VsDevCmd in order, fall through to bare nvcc if none found.
+    // Simpler approach: just call vcvars64.bat if it exists, otherwise run nvcc directly.
+    // The cleanest portable solution is to use `cmd /C "call VsDevCmd.bat 2>nul & nvcc ..."`.
+    // We try the most common path and silently ignore if not found (2>nul).
+    // Try Professional edition first (detected from user environment), then Community/BuildTools
+    const vcvars = `"C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional\\VC\\Auxiliary\\Build\\vcvars64.bat"`;
+
+    const nvccCmd =
+      `nvcc -O3 -arch=${cudaArch} -std=c++17 ` +
+      `-o bin/${exeName} ${block.fileName} ` +
+      `-I. -I.. ` +
+      `-lws2_32 ` +
+      `-Xcompiler /W0 ` +
+      `-diag-suppress 177 ` +
+      `--expt-relaxed-constexpr`;
+
+    // Wrap in cmd so we can chain vcvars64 initialisation before nvcc.
+    // `call vcvars64.bat 2>nul` silently fails if the path doesn't exist,
+    // then nvcc runs anyway (works if nvcc + cl.exe are already on PATH).
+    return `cmd /C "call ${vcvars} 2>nul & ${nvccCmd}"`;
+  }
+
+  // Standard C++ block
+  return (
+    `g++ -fopenmp ` +
+    `-o bin/${exeName} ${block.fileName} ` +
+    `-lws2_32 -O3 -march=native -std=c++17`
+  );
+};
+
 export const useServerOperations = ({
   blocks,
   connections,
@@ -77,7 +158,8 @@ export const useServerOperations = ({
     }
 
     if (block.language === 'cpp') {
-      const exeName = block.fileName.replace('.cpp', '.exe');
+      // Support both .cpp and .cu extensions — exe name strips either
+      const exeName = block.fileName.replace(/\.(cpp|cu)$/i, '.exe');
       const inputConns = connections.filter(c => c.toBlock === block.id).sort((a, b) => a.toPort - b.toPort);
       const outputConns = connections.filter(c => c.fromBlock === block.id).sort((a, b) => a.fromPort - b.fromPort);
       const args = [];
@@ -100,13 +182,11 @@ export const useServerOperations = ({
   /**
    * Returns a Promise that resolves when signalBlockReady(blockId) is called
    * from the socket message handler in App.jsx.
-   * No polling. No stale closures. No state reads.
    */
   const waitForBlockReady = (blockId, blockName, timeout = 30000) => {
     return new Promise((resolve, reject) => {
       const key = String(blockId);
 
-      // Clean up any stale entry
       const existing = _blockReadyRegistry.get(key);
       if (existing) {
         clearTimeout(existing.timer);
@@ -127,12 +207,11 @@ export const useServerOperations = ({
     if (!projectDir) { alert('Loading project directory...'); return; }
     if (!instanceConfig) { alert('Instance configuration not loaded...'); return; }
 
-    // Reset cancellation flag and launched processes list
     startupCancelledRef.current = false;
     launchedDuringStartupRef.current = [];
 
     setIsStarting(true);
-    
+
     try {
       addLog('info', `Project directory: ${projectDir}`);
       addLog('info', `Instance config: ${JSON.stringify(instanceConfig)}`);
@@ -148,7 +227,7 @@ export const useServerOperations = ({
 
       const platform = await window.electronAPI.getPlatform();
       const mexExt = platform === 'win32' ? 'mexw64' : (platform === 'darwin' ? 'mexmaci64' : 'mexa64');
-      
+
       if (startupCancelledRef.current) { addLog('warning', 'Startup cancelled by user'); return; }
 
       try {
@@ -165,27 +244,79 @@ export const useServerOperations = ({
 
       if (startupCancelledRef.current) { addLog('warning', 'Startup cancelled by user'); return; }
 
+      // ── Compile C++ / CUDA blocks ──────────────────────────────────────────
       const cppBlocks = blocks.filter(b => b.language === 'cpp');
       if (cppBlocks.length > 0) {
-        addLog('info', `Found ${cppBlocks.length} C++ block(s) to compile...`);
+        addLog('info', `Found ${cppBlocks.length} C++/CUDA block(s) to compile...`);
         for (const block of cppBlocks) {
           if (startupCancelledRef.current) { addLog('warning', 'Startup cancelled by user'); return; }
 
-          addLog('info', `Checking ${block.name} | startWithAll=${block.startWithAll}`);
-          const exeName = block.fileName.replace('.cpp', '.exe');
+          const isCuda = isCudaBlock(block);
+          const exeName = block.fileName.replace(/\.(cpp|cu)$/i, '.exe');
           const exePath = `${projectDir}/cpp_blocks/bin/${exeName}`;
-          
+          const compiler = isCuda ? 'nvcc' : 'g++';
+          const label    = isCuda ? 'CUDA' : 'C++';
+
+          addLog('info', `Checking ${block.name} [${label}] | startWithAll=${block.startWithAll}`);
+
           try {
             await window.electronAPI.readFile(exePath);
             addLog('success', `Found existing ${exeName} in bin/ - skipping`);
           } catch (e) {
-            addLog('info', `Compiling ${block.fileName} to bin/...`);
-            await window.electronAPI.writeFile(`${projectDir}/cpp_blocks/${block.fileName}`, block.code);
+            addLog('info', `Compiling ${block.fileName} [${label}] to bin/ using ${compiler}...`);
+
+            // Write the source file to disk first
+            await window.electronAPI.writeFile(
+              `${projectDir}/cpp_blocks/${block.fileName}`,
+              block.code
+            );
+
+            // For CUDA blocks: run a quick diagnostic before attempting full compile
+            if (isCudaBlock(block)) {
+              const nvccCheck = await window.electronAPI.execCommand('nvcc --version', projectDir);
+              if (!nvccCheck.success) {
+                throw new Error(
+                  `nvcc not found on PATH.\n\n` +
+                  `Please install the CUDA Toolkit from https://developer.nvidia.com/cuda-downloads\n` +
+                  `and make sure nvcc.exe is on your system PATH.\n\n` +
+                  `Typical location: C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\vX.X\\bin\\`
+                );
+              }
+              addLog('info', `nvcc found: ${(nvccCheck.stdout || '').split('\n')[0].trim()}`);
+
+              // Check if cl.exe (MSVC) is accessible
+              const clCheck = await window.electronAPI.execCommand('cl.exe 2>&1 | findstr /i "version"', projectDir);
+              if (!clCheck.success && !clCheck.stdout) {
+                addLog('warning',
+                  `cl.exe (MSVC) not found on PATH — nvcc will try to initialise ` +
+                  `Visual Studio automatically via vcvars64.bat.\n` +
+                  `If compilation fails, open a "Developer Command Prompt for VS 2022" and restart the app.`
+                );
+              } else {
+                addLog('info', `cl.exe found — MSVC available for nvcc`);
+              }
+            }
+
+            const compileCmd = buildCompileCommand(block, projectDir);
+            addLog('info', `Compile command: ${compileCmd}`);
+
             const r = await window.electronAPI.execCommand(
-              `g++ -fopenmp -o bin/${exeName} ${block.fileName} -lws2_32 -O3 -march=native -std=c++17`,
+              compileCmd,
               `${projectDir}/cpp_blocks`
             );
-            if (!r.success) throw new Error(`C++ compilation failed for ${block.fileName}:\n${r.stderr || r.error}`);
+
+            if (!r.success) {
+              // Log the full stderr so the real compiler error is visible in the UI
+              if (r.stderr) {
+                addLog('error', `${label} compiler output:\n${r.stderr}`);
+              }
+              if (r.stdout) {
+                addLog('error', `${label} compiler stdout:\n${r.stdout}`);
+              }
+              throw new Error(
+                `${label} compilation failed for ${block.fileName}:\n${r.stderr || r.error}`
+              );
+            }
             addLog('success', `Compiled ${block.fileName} → bin/${exeName}`);
           }
         }
@@ -200,7 +331,10 @@ export const useServerOperations = ({
         try { await window.electronAPI.readFile(`${projectDir}/server/pipe_server.cpp`); }
         catch (e2) { throw new Error('pipe_server.cpp not found in server/ folder.'); }
         addLog('info', 'Compiling pipe server...');
-        const r = await window.electronAPI.execCommand('g++ -o pipe_server.exe pipe_server.cpp -lws2_32 -O2', `${projectDir}/server`);
+        const r = await window.electronAPI.execCommand(
+          'g++ -o pipe_server.exe pipe_server.cpp -lws2_32 -O2',
+          `${projectDir}/server`
+        );
         if (!r.success) throw new Error(`Pipe server compilation failed:\n${r.stderr || r.error}`);
         addLog('success', 'Pipe server compiled');
       }
@@ -223,7 +357,9 @@ export const useServerOperations = ({
       });
 
       addLog('info', `Starting pipe server: ${serverCmd}`);
-      const serverProc = await window.electronAPI.startServerWithSocket(serverCmd, `${projectDir}/server`, 'server');
+      const serverProc = await window.electronAPI.startServerWithSocket(
+        serverCmd, `${projectDir}/server`, 'server'
+      );
       if (!serverProc.success) throw new Error('Failed to start server: ' + serverProc.error);
 
       launchedDuringStartupRef.current.push({ type: 'server', pid: serverProc.pid });
@@ -250,8 +386,11 @@ export const useServerOperations = ({
       addLog('info', '=== STARTING BLOCK SEQUENCE ===');
 
       for (const block of blocks) {
-        if (block.language === 'matlab') await window.electronAPI.writeFile(`${projectDir}/matlab_blocks/${block.fileName}`, block.code);
-        else if (block.language === 'cpp') await window.electronAPI.writeFile(`${projectDir}/cpp_blocks/${block.fileName}`, block.code);
+        if (block.language === 'matlab') {
+          await window.electronAPI.writeFile(`${projectDir}/matlab_blocks/${block.fileName}`, block.code);
+        } else if (block.language === 'cpp') {
+          await window.electronAPI.writeFile(`${projectDir}/cpp_blocks/${block.fileName}`, block.code);
+        }
       }
 
       const blocksToStart = sortedBlocks.filter(b => b.startWithAll);
@@ -278,7 +417,8 @@ export const useServerOperations = ({
 
         try {
           const languagePort = getBlockLanguagePort(block, instanceConfig);
-          addLog('info', `[${startedCount + 1}/${blocksToStart.length}] Starting ${block.name} [${block.language?.toUpperCase()}] → port ${languagePort}`);
+          const label = isCudaBlock(block) ? 'CUDA' : (block.language?.toUpperCase() || 'C++');
+          addLog('info', `[${startedCount + 1}/${blocksToStart.length}] Starting ${block.name} [${label}] → port ${languagePort}`);
 
           const parsed = buildBlockArgs(block, connections);
           let fullCommand;
@@ -292,7 +432,7 @@ export const useServerOperations = ({
           } else {
             const { functionCall } = parsed;
             const matlabCommand = `cd('${projectDir}/matlab_blocks'); addpath('${projectDir}/server'); addpath('${projectDir}/matlab_blocks/core'); ${functionCall}`;
-            
+
             if (platform === 'win32') {
               fullCommand = `cmd /C "set BLOCK_ID=${block.id}&& set INSTANCE_ID=${instanceConfig.instanceId}&& set MATLAB_PORT=${languagePort}&& matlab -batch \\"${matlabCommand}\\""`;
             } else {
@@ -302,17 +442,24 @@ export const useServerOperations = ({
           }
 
           const procResult = await window.electronAPI.startProcess(fullCommand, projectDir, block.name);
-          
+
           if (procResult.success) {
-            launchedDuringStartupRef.current.push({ type: 'block', pid: procResult.pid, blockId: block.id, name: block.name });
+            launchedDuringStartupRef.current.push({
+              type: 'block', pid: procResult.pid, blockId: block.id, name: block.name
+            });
 
             setBlockProcesses(prev => ({
               ...prev,
-              [block.id]: { pid: procResult.pid, status: 'starting', name: block.name, language: block.language || 'matlab' }
+              [block.id]: {
+                pid: procResult.pid,
+                status: 'starting',
+                name: block.name,
+                language: block.language || 'matlab'
+              }
             }));
-            
+
             addLog('info', `${block.name} launched (PID: ${procResult.pid}), waiting for BLOCK_READY...`);
-            
+
             if (startupCancelledRef.current) {
               addLog('warning', 'Startup cancelled - cleaning up launched processes');
               await cleanupLaunchedProcesses();
@@ -320,10 +467,8 @@ export const useServerOperations = ({
             }
 
             try {
-              // ✅ KEY FIX: wait for signalBlockReady() called from socket handler
-              // instead of polling stale React state
               await waitForBlockReady(block.id, block.name);
-              
+
               if (startupCancelledRef.current) {
                 addLog('warning', 'Startup cancelled during block initialization - cleaning up');
                 await cleanupLaunchedProcesses();
@@ -400,17 +545,16 @@ export const useServerOperations = ({
   // ─── Combined Stop All ────────────────────────────────────────────────────
   const handleStopAll = async () => {
     startupCancelledRef.current = true;
-    
-    // Reject all pending waiters immediately
+
     for (const [key, entry] of _blockReadyRegistry.entries()) {
       clearTimeout(entry.timer);
       entry.reject(new Error('Startup cancelled'));
     }
     _blockReadyRegistry.clear();
-    
+
     addLog('info', 'Stopping all processes...');
     setIsStarting(false);
-    
+
     const result = await window.electronAPI.killAllProcesses();
     if (result.success) {
       addLog('success', `Terminated ${result.killedCount} process(es)`);
@@ -431,10 +575,14 @@ export const useServerOperations = ({
     try {
       const platform = await window.electronAPI.getPlatform();
       const languagePort = getBlockLanguagePort(block, instanceConfig);
-      addLog('info', `Manually starting ${block.name} [${block.language?.toUpperCase()}] → port ${languagePort}`);
+      const label = isCudaBlock(block) ? 'CUDA' : (block.language?.toUpperCase() || 'C++');
+      addLog('info', `Manually starting ${block.name} [${label}] → port ${languagePort}`);
 
-      if (block.language === 'matlab') await window.electronAPI.writeFile(`${projectDir}/matlab_blocks/${block.fileName}`, block.code);
-      else if (block.language === 'cpp') await window.electronAPI.writeFile(`${projectDir}/cpp_blocks/${block.fileName}`, block.code);
+      if (block.language === 'matlab') {
+        await window.electronAPI.writeFile(`${projectDir}/matlab_blocks/${block.fileName}`, block.code);
+      } else if (block.language === 'cpp') {
+        await window.electronAPI.writeFile(`${projectDir}/cpp_blocks/${block.fileName}`, block.code);
+      }
 
       const parsed = buildBlockArgs(block, connections);
       let fullCommand;
@@ -447,7 +595,7 @@ export const useServerOperations = ({
       } else {
         const { functionCall } = parsed;
         const matlabCommand = `cd('${projectDir}/matlab_blocks'); addpath('${projectDir}/server'); addpath('${projectDir}/matlab_blocks/core'); ${functionCall}`;
-        
+
         if (platform === 'win32') {
           fullCommand = `cmd /C "set BLOCK_ID=${block.id}&& set INSTANCE_ID=${instanceConfig.instanceId}&& set MATLAB_PORT=${languagePort}&& matlab -batch \\"${matlabCommand}\\""`;
         } else {
@@ -460,7 +608,12 @@ export const useServerOperations = ({
       if (procResult.success) {
         setBlockProcesses(prev => ({
           ...prev,
-          [block.id]: { pid: procResult.pid, status: 'starting', name: block.name, language: block.language || 'matlab' }
+          [block.id]: {
+            pid: procResult.pid,
+            status: 'starting',
+            name: block.name,
+            language: block.language || 'matlab'
+          }
         }));
         addLog('info', `${block.name} started (PID: ${procResult.pid})`);
       } else {

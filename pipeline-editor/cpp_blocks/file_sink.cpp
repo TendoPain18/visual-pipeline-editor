@@ -352,7 +352,7 @@ int main(int argc, char *argv[]) {
         1,                      // inputs
         0,                      // outputs
         {1501},                 // inputPacketSizes
-        {6000},                // inputBatchSizes
+        {64},                // inputBatchSizes
         {},                     // outputPacketSizes
         {},                     // outputBatchSizes
         true,                   // ltr

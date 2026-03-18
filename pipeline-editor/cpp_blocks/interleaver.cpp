@@ -231,9 +231,9 @@ int main(int argc, char* argv[]) {
         2,                        // inputs
         2,                        // outputs
         {3030, 3},                // inputPacketSizes  [ENC_DATA, rate_enc_len]
-        {6000, 6000},             // inputBatchSizes
+        {64, 64},             // inputBatchSizes
         {3030, 3},                // outputPacketSizes [INTERLEAVED_DATA, rate_enc_len]
-        {6000, 6000},             // outputBatchSizes
+        {64, 64},             // outputBatchSizes
         true,                     // ltr
         true,                     // startWithAll
         "IEEE 802.11a two-step interleaver: SIGNAL=BPSK, DATA=rate-dependent, RATE passthrough"

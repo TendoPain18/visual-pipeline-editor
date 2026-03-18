@@ -1,9 +1,10 @@
 import { generateColor, calculatePortPositions, BLOCK_WIDTH, BLOCK_HEIGHT, GRID_SIZE } from './blockUtils';
 
 /**
- * Parse C++ block configuration from source code
- * Looks for BlockConfig struct initialization
- * 
+ * Parse C++ / CUDA block configuration from source code.
+ * Looks for BlockConfig struct initialization.
+ * Supports both .cpp and .cu file extensions.
+ *
  * FIX: The original regex `[^}]*` stopped at the first `}` inside the struct body,
  * which happened to be the closing brace of the first array literal (e.g. `{1504}`).
  * This meant ltr, startWithAll, and description were never reached by the parser.
@@ -16,11 +17,10 @@ import { generateColor, calculatePortPositions, BLOCK_WIDTH, BLOCK_HEIGHT, GRID_
  * correctly handling nested `{...}` array literals.
  */
 const extractStructBody = (fileContent) => {
-  // Find the start of the BlockConfig initializer
   const headerMatch = fileContent.match(/BlockConfig\s+\w+\s*=\s*\{/);
   if (!headerMatch) return null;
 
-  const startIdx = headerMatch.index + headerMatch[0].length; // character after the opening `{`
+  const startIdx = headerMatch.index + headerMatch[0].length;
 
   let depth = 1;
   let i = startIdx;
@@ -31,9 +31,9 @@ const extractStructBody = (fileContent) => {
     i++;
   }
 
-  if (depth !== 0) return null; // Unmatched braces
+  if (depth !== 0) return null;
 
-  return fileContent.slice(startIdx, i - 1); // Content between the outermost braces
+  return fileContent.slice(startIdx, i - 1);
 };
 
 const parseCppStruct = (fileContent) => {
@@ -43,7 +43,6 @@ const parseCppStruct = (fileContent) => {
   const config = {};
 
   // ── String fields ────────────────────────────────────────────────────────────
-  // Match:  "value",   // fieldName  (extra trailing text allowed)
   const stringFields = ['name', 'description'];
   stringFields.forEach(field => {
     const regex = new RegExp('"([^"]*)"[^\\n]*//[^\\n]*\\b' + field + '\\b', 'i');
@@ -60,7 +59,6 @@ const parseCppStruct = (fileContent) => {
   });
 
   // ── Boolean fields ───────────────────────────────────────────────────────────
-  // Match:  true,      // ltr   or   false,  // startWithAll (AUTO-START)
   const boolFields = ['ltr', 'startWithAll', 'isGraph'];
   boolFields.forEach(field => {
     const regex = new RegExp('(true|false)[^\\n]*//[^\\n]*\\b' + field + '\\b', 'i');
@@ -69,7 +67,6 @@ const parseCppStruct = (fileContent) => {
   });
 
   // ── Array fields ─────────────────────────────────────────────────────────────
-  // Match:  {val1, val2},   // fieldName
   const arrayFields = [
     'inputPacketSizes',
     'inputBatchSizes',
@@ -113,43 +110,55 @@ const calculateBufferSize = (packetSize, batchSize) => {
 };
 
 /**
- * Main C++ block parser
+ * Returns true if the file is a CUDA source file (.cu extension).
+ */
+export const isCudaFile = (fileName) => {
+  return fileName && fileName.toLowerCase().endsWith('.cu');
+};
+
+/**
+ * Strips .cpp or .cu extension and returns just the base name.
+ */
+export const stripCppExtension = (fileName) => {
+  return fileName.replace(/\.(cpp|cu)$/i, '');
+};
+
+/**
+ * Main C++ / CUDA block parser.
+ * Accepts both .cpp and .cu files.
  */
 export const parseCppBlock = (fileContent, fileName) => {
   const config = parseCppStruct(fileContent);
 
   if (!config) {
+    const isCuda = isCudaFile(fileName);
     throw new Error(
-      'No BlockConfig struct found.\n\n' +
-      'Add a BlockConfig initialization to your C++ file.\n\n' +
-      'Example:\n' +
-      'BlockConfig config = {\n' +
-      '    "MyBlock",      // name\n' +
-      '    1,              // inputs\n' +
-      '    1,              // outputs\n' +
-      '    {1500},         // inputPacketSizes\n' +
-      '    {10},           // inputBatchSizes\n' +
-      '    {1500},         // outputPacketSizes\n' +
-      '    {10},           // outputBatchSizes\n' +
-      '    true,           // ltr\n' +
-      '    true,           // startWithAll\n' +
-      '    "Description"   // description\n' +
-      '};'
+      `No BlockConfig struct found.\n\n` +
+      `Add a BlockConfig initialization to your ${isCuda ? 'CUDA (.cu)' : 'C++ (.cpp)'} file.\n\n` +
+      `Example:\n` +
+      `BlockConfig config = {\n` +
+      `    "MyBlock",      // name\n` +
+      `    1,              // inputs\n` +
+      `    1,              // outputs\n` +
+      `    {1500},         // inputPacketSizes\n` +
+      `    {10},           // inputBatchSizes\n` +
+      `    {1500},         // outputPacketSizes\n` +
+      `    {10},           // outputBatchSizes\n` +
+      `    true,           // ltr\n` +
+      `    true,           // startWithAll\n` +
+      `    "Description"   // description\n` +
+      `};`
     );
   }
 
-  const numInputs = config.inputs || 0;
+  const numInputs  = config.inputs  || 0;
   const numOutputs = config.outputs || 0;
 
-  // Parse packet sizes
-  let inputPacketSizes = config.inputPacketSizes || [0];
+  let inputPacketSizes  = config.inputPacketSizes  || [0];
   let outputPacketSizes = config.outputPacketSizes || [0];
+  let inputBatchSizes   = config.inputBatchSizes   || [1];
+  let outputBatchSizes  = config.outputBatchSizes  || [1];
 
-  // Parse batch sizes
-  let inputBatchSizes = config.inputBatchSizes || [1];
-  let outputBatchSizes = config.outputBatchSizes || [1];
-
-  // Ensure arrays match port counts
   if (numInputs > 0 && inputPacketSizes.length !== numInputs) {
     throw new Error(`inputPacketSizes array length (${inputPacketSizes.length}) must match inputs (${numInputs})`);
   }
@@ -163,24 +172,19 @@ export const parseCppBlock = (fileContent, fileName) => {
     throw new Error(`outputBatchSizes array length (${outputBatchSizes.length}) must match outputs (${numOutputs})`);
   }
 
-  // Calculate buffer sizes
   const inputBufferSizes = inputPacketSizes.map((packetSize, i) =>
     calculateBufferSize(packetSize, inputBatchSizes[i])
   );
-
   const outputBufferSizes = outputPacketSizes.map((packetSize, i) =>
     calculateBufferSize(packetSize, outputBatchSizes[i])
   );
 
-  // Calculate length header sizes
-  const inputLengthBytes = inputBatchSizes.map(calculateLengthBytes);
+  const inputLengthBytes  = inputBatchSizes.map(calculateLengthBytes);
   const outputLengthBytes = outputBatchSizes.map(calculateLengthBytes);
 
-  // Total sizes
-  const totalInputSize = inputBufferSizes.reduce((a, b) => a + b, 0);
+  const totalInputSize  = inputBufferSizes.reduce((a, b) => a + b, 0);
   const totalOutputSize = outputBufferSizes.reduce((a, b) => a + b, 0);
 
-  // Size relation
   let sizeRelation;
   if (totalInputSize === 0) {
     sizeRelation = { type: 'source', description: 'Data source' };
@@ -204,19 +208,21 @@ export const parseCppBlock = (fileContent, fileName) => {
     };
   }
 
-  const ltr = config.ltr !== undefined ? config.ltr : true;
+  const ltr          = config.ltr          !== undefined ? config.ltr          : true;
   const startWithAll = config.startWithAll !== undefined ? config.startWithAll : false;
-  const isGraph = config.graphType !== undefined;
+  const isGraph      = config.graphType    !== undefined;
+  const cuda         = isCudaFile(fileName);
 
   return {
-    name: config.name || fileName.replace('.cpp', ''),
+    name:     config.name || stripCppExtension(fileName),
     fileName,
-    code: fileContent,
-    language: 'cpp',
-    inputs: numInputs,
+    code:     fileContent,
+    language: 'cpp',   // still 'cpp' so the rest of the pipeline works unchanged
+    isCuda:   cuda,    // NEW: flag so compile / run logic can pick nvcc vs g++
+
+    inputs:  numInputs,
     outputs: numOutputs,
 
-    // Batch processing fields
     inputPacketSizes,
     inputBatchSizes,
     outputPacketSizes,
@@ -226,15 +232,19 @@ export const parseCppBlock = (fileContent, fileName) => {
     inputLengthBytes,
     outputLengthBytes,
 
-    // Legacy fields
-    inputSize: totalInputSize,
-    outputSize: totalOutputSize,
-    inputSizes: inputBufferSizes,
+    // Legacy
+    inputSize:   totalInputSize,
+    outputSize:  totalOutputSize,
+    inputSizes:  inputBufferSizes,
     outputSizes: outputBufferSizes,
 
     description: config.description || 'No description',
     config,
-    color: isGraph ? '#9333ea' : generateColor(config.name || fileName.replace('.cpp', '')),
+    color: isGraph
+      ? '#9333ea'
+      : cuda
+        ? '#22c55e'   // green tint for CUDA blocks so they're visually distinct
+        : generateColor(config.name || stripCppExtension(fileName)),
     portPositions: calculatePortPositions(numInputs, numOutputs, ltr, BLOCK_WIDTH, BLOCK_HEIGHT, GRID_SIZE),
     sizeRelation,
     ltr,
@@ -245,7 +255,8 @@ export const parseCppBlock = (fileContent, fileName) => {
 };
 
 /**
- * Detect if a file is a C++ block
+ * Detect if a file is a C++ or CUDA block.
+ * Checks for the run_generic_block include in source content.
  */
 export const isCppBlock = (fileContent) => {
   return (

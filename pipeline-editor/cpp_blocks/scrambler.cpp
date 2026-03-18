@@ -169,9 +169,9 @@ int main(int argc, char* argv[]) {
         2,                       // inputs
         2,                       // outputs
         {1515, 3},               // inputPacketSizes  [DATA_max, RATE/LIP]
-        {6000, 6000},          // inputBatchSizes
+        {64, 64},          // inputBatchSizes
         {1515, 3},               // outputPacketSizes [DATA_max, RATE/LIP]
-        {6000, 6000},          // outputBatchSizes
+        {64, 64},          // outputBatchSizes
         true,                    // ltr
         true,                    // startWithAll
         "Scrambler: SIGNAL passthrough, DATA scrambled up to lip bytes, RATE/LIP passthrough"

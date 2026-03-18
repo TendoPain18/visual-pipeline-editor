@@ -371,9 +371,9 @@ int main(int argc, char* argv[]) {
         2,                      // inputs
         2,                      // outputs
         {1515, 3},              // inputPacketSizes  [DATA_max, RATE/LIP]
-        {6000, 6000},         // inputBatchSizes
+        {64, 64},         // inputBatchSizes
         {3030, 3},              // outputPacketSizes [ENC_DATA_max, rate_enc_len]
-        {6000, 6000},         // outputBatchSizes
+        {64, 64},         // outputBatchSizes
         true,                   // ltr
         true,                   // startWithAll
         "IEEE 802.11a convolutional encoder: SIGNAL@R=1/2, DATA@variable rate"

@@ -120,9 +120,9 @@ int main(int argc, char* argv[]) {
         1,                  // inputs
         1,                  // outputs
         {1504},             // inputPacketSizes
-        {6000},            // inputBatchSizes
+        {64},            // inputBatchSizes
         {1501},             // outputPacketSizes
-        {6000},            // outputBatchSizes
+        {64},            // outputBatchSizes
         true,               // ltr
         true,               // startWithAll (AUTO-START)
         "CRC-32 decoder with error detection - batch processing"  // description

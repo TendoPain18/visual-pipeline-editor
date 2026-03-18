@@ -3,6 +3,8 @@
 #include <climits>
 #include <cstdint>
 #include <cstdio>
+#include <vector>
+#include <memory>
 #include <omp.h>
 
 // ============================================================
@@ -311,14 +313,10 @@ static const char* rateCodeName(int rc) {
 
 // -----------------------------------------------------------------------
 // Per-thread working buffers.
-// Instantiated inside each OpenMP parallel region — one private copy per
-// thread. The survivors buffer is heap-allocated (too large for stack);
-// all other arrays fit on the stack inside this struct.
-//
-// Memory vs old layout (per thread):
-//   OLD: encBits(97KB) + depBits(194KB) + decBits(97KB) = 388KB int arrays
-//   NEW: depPairs(97KB) + decBits(97KB)                 = 194KB int arrays
-//   Saving: ~194KB per thread (~1.2MB across 6 threads)
+// Pre-allocated once in init_channel_decode() into a heap-allocated vector,
+// reused every batch — eliminates ~1.5MB heap alloc/free per thread per batch.
+// Stored behind a shared_ptr so copy of ChannelDecodeData is safe (the runner
+// copies the struct out of init_fn's return value before calling process_fn).
 // -----------------------------------------------------------------------
 struct ThreadBuffers {
     uint8_t* survivors;              // NUM_STATES * DEC_BITS_MAX bytes (heap)
@@ -344,6 +342,13 @@ struct ChannelDecodeData {
     int frameCount;
     int errorFrames;
     int numThreads;
+
+    // Pre-allocated per-thread buffers behind a shared_ptr so that the
+    // copy-assignment in run_manual_block (customData = init_fn(config))
+    // doesn't double-free them when the temporary destructs.
+    std::shared_ptr<std::vector<ThreadBuffers*>> threadBufs;
+
+    ChannelDecodeData() : frameCount(0), errorFrames(0), numThreads(0) {}
 };
 
 ChannelDecodeData init_channel_decode(const BlockConfig& config) {
@@ -351,7 +356,21 @@ ChannelDecodeData init_channel_decode(const BlockConfig& config) {
     data.frameCount  = 0;
     data.errorFrames = 0;
     build_trellis(data.acsTable, data.predTable);
-    data.numThreads = omp_get_max_threads();
+    data.numThreads = 64;
+
+    // Pre-allocate one ThreadBuffers per thread.
+    // Using shared_ptr with a custom deleter so that the copy-assignment
+    // in run_manual_block (customData = init_fn(config)) is safe — the
+    // temporary's destructor just decrements the refcount, not frees memory.
+    data.threadBufs = std::shared_ptr<std::vector<ThreadBuffers*>>(
+        new std::vector<ThreadBuffers*>(data.numThreads),
+        [](std::vector<ThreadBuffers*>* v) {
+            for (auto* tb : *v) delete tb;
+            delete v;
+        }
+    );
+    for (int i = 0; i < data.numThreads; i++)
+        (*data.threadBufs)[i] = new ThreadBuffers();
 
     printf("[ChannelDecode] ============================================\n");
     printf("[ChannelDecode] Viterbi Decoder initialized\n");
@@ -361,8 +380,8 @@ ChannelDecodeData init_channel_decode(const BlockConfig& config) {
            sizeof(data.acsTable));
     printf("[ChannelDecode] ENC_BITS_MAX=%d  DEP_BITS_MAX=%d  DEC_BITS_MAX=%d\n",
            ENC_BITS_MAX, DEP_BITS_MAX, DEC_BITS_MAX);
-    printf("[ChannelDecode] OpenMP parallel decode: %d threads\n", data.numThreads);
-    printf("[ChannelDecode] Per-thread survivors: %zu bytes (uint8_t)\n",
+    printf("[ChannelDecode] OpenMP parallel decode: %d threads (hardware)\n", data.numThreads);
+    printf("[ChannelDecode] Per-thread survivors: %zu bytes (uint8_t, pre-allocated)\n",
            (size_t)NUM_STATES * (size_t)DEC_BITS_MAX);
     printf("[ChannelDecode] in[0]: rate+lip+DATA 3027B  in[1]: SIGNAL_ENC 6B\n");
     printf("[ChannelDecode] out[0]: lip+DATA 1517B     out[1]: SIGNAL 3B\n");
@@ -422,7 +441,7 @@ void process_channel_decode(
     // ===== STEP 2: Decode SIGNAL -- parallel over packets =====
     #pragma omp parallel num_threads(customData.numThreads)
     {
-        ThreadBuffers tb;
+        ThreadBuffers& tb = *(*customData.threadBufs)[omp_get_thread_num()];
 
         #pragma omp for schedule(dynamic, 1)
         for (int i = 0; i < actualCount; i++) {
@@ -534,7 +553,7 @@ void process_channel_decode(
     // ===== STEP 5: Decode DATA -- parallel over packets =====
     #pragma omp parallel num_threads(customData.numThreads)
     {
-        ThreadBuffers tb;
+        ThreadBuffers& tb = *(*customData.threadBufs)[omp_get_thread_num()];
 
         #pragma omp for schedule(dynamic, 1)
         for (int i = 0; i < actualCount; i++) {
@@ -670,9 +689,9 @@ int main(int argc, char* argv[]) {
         2,               // inputs
         2,               // outputs
         {3027, 6},       // inputPacketSizes  [rate+lip+DATA_DEINT(3027), SIGNAL_ENC(6)]
-        {6000, 6000},    // inputBatchSizes
+        {64, 64},    // inputBatchSizes
         {1517, 3},       // outputPacketSizes [lip+DATA(1517), SIGNAL(3)]
-        {6000, 6000},    // outputBatchSizes
+        {64, 64},    // outputBatchSizes
         true,            // ltr
         true,            // startWithAll
         "Viterbi decoder: SIGNAL decoded+sent first; DATA decoded with enc_len lip from header; out[0]=lip+DATA"

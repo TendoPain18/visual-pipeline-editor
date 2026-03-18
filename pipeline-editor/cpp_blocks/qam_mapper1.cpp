@@ -5,7 +5,7 @@
 #include <cstdio>
 
 // ============================================================
-// IEEE 802.11a QAM Mapper (Frequency Domain)
+// IEEE 802.11a QAM Mapper
 //
 // Inputs:
 //   in[0]: Interleaved DATA from interleaver    (3030 bytes/pkt)  <- FIRST
@@ -15,24 +15,23 @@
 //             Byte 2: enc_len_hi
 //
 // Outputs:
-//   out[0]: Stacked frequency-domain IQ blocks  (130048 bytes/pkt)
-//             Block layout (each block = 64 subcarriers x 4 bytes = 256 bytes):
-//               Block 0   : STS symbol 1  (Short Training Sequence)
-//               Block 1   : STS symbol 2  (Short Training Sequence)
-//               Block 2   : LTS symbol 1  (Long Training Sequence)
-//               Block 3   : LTS symbol 2  (Long Training Sequence)
-//               Block 4   : SIGNAL        (BPSK, R=1/2, K=1)
-//               Block 5..N: DATA          (rate-dependent modulation)
-//             Total: 508 blocks max -> 508 * 256 = 130048 bytes
+//   out[0]: Stacked IQ symbols                  (129024 bytes/pkt)
+//             Layout per packet:
+//               N_total_sym symbols, each 256 bytes:
+//                 64 subcarriers x 4 bytes [I_lo, I_hi, Q_lo, Q_hi] (little-endian int16)
+//               Remaining bytes up to 129024 are zero.
+//             Symbol 0        = SIGNAL  (BPSK, K=1,   NCBPS=48)
+//             Symbols 1..NSYM = DATA    (rate-dependent modulation)
 //
 // Subcarrier layout (64-point FFT, indices -32..+31 mapped to array [0..63]):
-//   STS: non-zero at multiples of 4: ±4, ±8, ±12, ±16, ±20, ±24
-//   LTS: indices -26..+26 (DC=0)
 //   Data:   [-26:-22, -20:-8, -6:-1, 1:6, 8:20, 22:26]  = 48 subcarriers
 //   Pilots: [-21, -7, 7, 21]                              = 4 subcarriers
-//   Nulls:  everything else including DC                  = 12 subcarriers
+//   Nulls:  everything else including DC (index 0)        = 12 subcarriers
 //
-// Pilot value for symbol n: pilot_seq[n % 127]  (BPSK, +/-1)
+// Pilot value for symbol n: pilot_seq[n % 127]  (BPSK, +/-1, unscaled)
+//
+// Normalization: divide by max integer constellation point so packed
+// int16 range [-32767, 32767] is fully utilised without clipping.
 //
 // int8 pipe convention: stored byte B -> pipe int8_t = int8_t(uint8_t(B) - 128)
 // ============================================================
@@ -40,13 +39,11 @@
 // -----------------------------------------------------------------------
 // Constants
 // -----------------------------------------------------------------------
-static const int MAX_DATA_SYMBOLS = 504;  // 1 SIGNAL + 503 DATA max
-static const int PREAMBLE_BLOCKS  = 4;    // 2 STS + 2 LTS
-static const int MAX_TOTAL_BLOCKS = PREAMBLE_BLOCKS + MAX_DATA_SYMBOLS; // 508
-static const int SUBCARRIERS      = 64;
-static const int BYTES_PER_BLOCK  = SUBCARRIERS * 4;                    // 256
-static const int OUT_PKT_SIZE     = MAX_TOTAL_BLOCKS * BYTES_PER_BLOCK; // 130048
-static const int BATCH_SIZE       = 64;
+static const int MAX_SYMBOLS    = 504;
+static const int SUBCARRIERS    = 64;
+static const int BYTES_PER_SYM  = SUBCARRIERS * 4;             // 256
+static const int OUT_PKT_SIZE   = MAX_SYMBOLS * BYTES_PER_SYM; // 129024
+static const int BATCH_SIZE     = 64;
 
 // -----------------------------------------------------------------------
 // Rate parameters
@@ -104,58 +101,9 @@ static void buildSubcarrierMap() {
 }
 
 // -----------------------------------------------------------------------
-// Pack one IQ pair into 4 pipe bytes (little-endian int16, -128 offset)
-// -----------------------------------------------------------------------
-static void packIQ(int8_t* dst, double I, double Q) {
-    int16_t iVal = (int16_t)round(I * 32767.0);
-    int16_t qVal = (int16_t)round(Q * 32767.0);
-    uint16_t iu = (uint16_t)iVal;
-    uint16_t qu = (uint16_t)qVal;
-    dst[0] = (int8_t)((int32_t)(uint8_t)(iu & 0xFF)        - 128);
-    dst[1] = (int8_t)((int32_t)(uint8_t)((iu >> 8) & 0xFF) - 128);
-    dst[2] = (int8_t)((int32_t)(uint8_t)(qu & 0xFF)        - 128);
-    dst[3] = (int8_t)((int32_t)(uint8_t)((qu >> 8) & 0xFF) - 128);
-}
-
-// -----------------------------------------------------------------------
-// Build STS block
-//
-// Non-zero subcarrier indices (multiples of 4, ±4..±24), scaled by sqrt(13/6).
-// Values per IEEE 802.11a spec S_{-26,26}.
-// -----------------------------------------------------------------------
-static void buildStsBlock(int8_t* blockBuf) {
-    memset(blockBuf, 0x80, BYTES_PER_BLOCK);
-    const double scale = sqrt(13.0 / 6.0);
-    struct { int idx; double I; double Q; } sts[] = {
-        {-24, -1.0, -1.0}, {-20,  1.0,  1.0}, {-16, -1.0, -1.0}, {-12,  1.0,  1.0},
-        { -8, -1.0, -1.0}, { -4,  1.0,  1.0}, {  4, -1.0, -1.0}, {  8, -1.0, -1.0},
-        { 12,  1.0,  1.0}, { 16,  1.0,  1.0}, { 20,  1.0,  1.0}, { 24,  1.0,  1.0},
-    };
-    for (int k = 0; k < 12; k++)
-        packIQ(blockBuf + (sts[k].idx + 32) * 4, scale * sts[k].I, scale * sts[k].Q);
-}
-
-// -----------------------------------------------------------------------
-// Build LTS block
-//
-// L_{-26,26} from IEEE 802.11a spec, DC=0 at index 0.
-// -----------------------------------------------------------------------
-static void buildLtsBlock(int8_t* blockBuf) {
-    memset(blockBuf, 0x80, BYTES_PER_BLOCK);
-    static const double lts[53] = {
-         1, 1,-1,-1, 1, 1,-1, 1,-1, 1, 1, 1, 1, 1, 1,-1,-1, 1, 1,-1, 1,-1, 1, 1, 1, 1,
-         0,  // DC (subcarrier index 0)
-         1,-1,-1, 1, 1,-1, 1,-1, 1,-1,-1,-1,-1,-1, 1, 1,-1,-1, 1,-1, 1,-1, 1, 1, 1, 1
-    };
-    for (int i = 0; i < 53; i++) {
-        int arrPos = (-26 + i) + 32;  // subcarrier -26..+26 -> array [6..58]
-        packIQ(blockBuf + arrPos * 4, lts[i], 0.0);
-    }
-}
-
-// -----------------------------------------------------------------------
 // Gray-coded QAM mapping
 // -----------------------------------------------------------------------
+
 static void mapBPSK(const uint8_t* bits, double& I, double& Q) {
     I = (bits[0] == 0) ? -1.0 : 1.0;
     Q = 0.0;
@@ -178,11 +126,18 @@ static void map16QAM(const uint8_t* bits, double& I, double& Q) {
 }
 
 // 64-QAM: b0=MSB, Gray coded per IEEE 802.11a Table 85
+// 000->-7, 001->-5, 011->-3, 010->-1, 110->+1, 111->+3, 101->+5, 100->+7
 static int qam64Axis(uint8_t b0, uint8_t b1, uint8_t b2) {
     uint8_t code = (b0 << 2) | (b1 << 1) | b2;
     switch (code) {
-        case 0: return -7; case 1: return -5; case 3: return -3; case 2: return -1;
-        case 6: return  1; case 7: return  3; case 5: return  5; case 4: return  7;
+        case 0: return -7;
+        case 1: return -5;
+        case 3: return -3;
+        case 2: return -1;
+        case 6: return  1;
+        case 7: return  3;
+        case 5: return  5;
+        case 4: return  7;
         default: return 0;
     }
 }
@@ -191,10 +146,10 @@ static void map64QAM(const uint8_t* bits, double& I, double& Q) {
     Q = (double)qam64Axis(bits[3], bits[4], bits[5]);
 }
 
-static void mapSymbol(const uint8_t* bits, int NBPSC, double& I, double& Q) {
+static void mapSymbol(const uint8_t* bits, int NBPSC, double /*K*/, double& I, double& Q) {
     switch (NBPSC) {
-        case 1: mapBPSK (bits, I, Q); break;
-        case 2: mapQPSK (bits, I, Q); break;
+        case 1: mapBPSK (bits, I, Q); I /= 1.0; Q /= 1.0; break;
+        case 2: mapQPSK (bits, I, Q); I /= 1.0; Q /= 1.0; break;
         case 4: map16QAM(bits, I, Q); I /= 3.0; Q /= 3.0; break;
         case 6: map64QAM(bits, I, Q); I /= 7.0; Q /= 7.0; break;
         default: I = Q = 0.0; break;
@@ -202,22 +157,38 @@ static void mapSymbol(const uint8_t* bits, int NBPSC, double& I, double& Q) {
 }
 
 // -----------------------------------------------------------------------
-// Write one OFDM symbol (48 data subcarriers + 4 pilots)
+// Pack one IQ pair into 4 pipe bytes (little-endian int16, -128 offset)
+// -----------------------------------------------------------------------
+static void packIQ(int8_t* dst, double I, double Q) {
+    int16_t iVal = (int16_t)round(I * 32767.0);
+    int16_t qVal = (int16_t)round(Q * 32767.0);
+    uint16_t iu = (uint16_t)iVal;
+    uint16_t qu = (uint16_t)qVal;
+    dst[0] = (int8_t)((int32_t)(uint8_t)(iu & 0xFF)        - 128);
+    dst[1] = (int8_t)((int32_t)(uint8_t)((iu >> 8) & 0xFF) - 128);
+    dst[2] = (int8_t)((int32_t)(uint8_t)(qu & 0xFF)        - 128);
+    dst[3] = (int8_t)((int32_t)(uint8_t)((qu >> 8) & 0xFF) - 128);
+}
+
+// -----------------------------------------------------------------------
+// Write one OFDM symbol from NCBPS bits
 // -----------------------------------------------------------------------
 static void writeOfdmSymbol(
     int8_t*        symBuf,
     const uint8_t* bits,
     int            NBPSC,
-    int            symIdx    // for pilot polarity
+    double         K,
+    int            symIdx
 ) {
     for (int sc = 0; sc < 48; sc++) {
         double I, Q;
-        mapSymbol(bits + sc * NBPSC, NBPSC, I, Q);
+        mapSymbol(bits + sc * NBPSC, NBPSC, K, I, Q);
         packIQ(symBuf + g_dataSubcarriers[sc] * 4, I, Q);
     }
     int8_t pilot = g_pilotSeq[symIdx % 127];
+    double pilotVal = (double)pilot;
     for (int p = 0; p < 4; p++) {
-        packIQ(symBuf + g_pilotSubcarriers[p] * 4, (double)pilot, 0.0);
+        packIQ(symBuf + g_pilotSubcarriers[p] * 4, pilotVal, 0.0);
     }
 }
 
@@ -226,8 +197,6 @@ static void writeOfdmSymbol(
 // -----------------------------------------------------------------------
 struct QamMapperData {
     int frameCount;
-    int8_t stsBlock[BYTES_PER_BLOCK]; // prebuilt STS template
-    int8_t ltsBlock[BYTES_PER_BLOCK]; // prebuilt LTS template
 };
 
 QamMapperData init_qam_mapper(const BlockConfig& config) {
@@ -235,8 +204,6 @@ QamMapperData init_qam_mapper(const BlockConfig& config) {
     data.frameCount = 0;
     buildPilotSeq();
     buildSubcarrierMap();
-    buildStsBlock(data.stsBlock);
-    buildLtsBlock(data.ltsBlock);
     return data;
 }
 
@@ -292,7 +259,6 @@ void process_qam_mapper(
         }
         int N_SYM = dataBits / dataParams.NCBPS;
 
-        // Unpack bits from interleaved byte stream
         int totalBits = encLen * 8;
         uint8_t* bits = new uint8_t[totalBits]();
         for (int b = 0; b < encLen; b++) {
@@ -301,31 +267,17 @@ void process_qam_mapper(
                 bits[b * 8 + bit] = (byte >> bit) & 1;
         }
 
-        int8_t* pktIQ = iqBuf + iqOff;
+        // Symbol 0: SIGNAL (BPSK)
+        int8_t* sym0Buf = iqBuf + iqOff;
+        memset(sym0Buf, 0x80, BYTES_PER_SYM);
+        writeOfdmSymbol(sym0Buf, bits, signalParams.NBPSC, signalParams.K, 0);
 
-        // ----- Block 0: STS #1 -----
-        memcpy(pktIQ + 0 * BYTES_PER_BLOCK, customData.stsBlock, BYTES_PER_BLOCK);
-
-        // ----- Block 1: STS #2 -----
-        memcpy(pktIQ + 1 * BYTES_PER_BLOCK, customData.stsBlock, BYTES_PER_BLOCK);
-
-        // ----- Block 2: LTS #1 -----
-        memcpy(pktIQ + 2 * BYTES_PER_BLOCK, customData.ltsBlock, BYTES_PER_BLOCK);
-
-        // ----- Block 3: LTS #2 -----
-        memcpy(pktIQ + 3 * BYTES_PER_BLOCK, customData.ltsBlock, BYTES_PER_BLOCK);
-
-        // ----- Block 4: SIGNAL (BPSK, first 48 bits of encoded stream) -----
-        int8_t* sigBuf = pktIQ + 4 * BYTES_PER_BLOCK;
-        memset(sigBuf, 0x80, BYTES_PER_BLOCK);
-        writeOfdmSymbol(sigBuf, bits, signalParams.NBPSC, 0);
-
-        // ----- Blocks 5..(4+N_SYM): DATA -----
+        // Symbols 1..N_SYM: DATA
         for (int sym = 0; sym < N_SYM; sym++) {
-            int8_t* symBuf = pktIQ + (5 + sym) * BYTES_PER_BLOCK;
-            memset(symBuf, 0x80, BYTES_PER_BLOCK);
+            int8_t* symBuf = iqBuf + iqOff + (sym + 1) * BYTES_PER_SYM;
+            memset(symBuf, 0x80, BYTES_PER_SYM);
             writeOfdmSymbol(symBuf, bits + 48 + sym * dataParams.NCBPS,
-                            dataParams.NBPSC, sym + 1);
+                            dataParams.NBPSC, dataParams.K, sym + 1);
         }
 
         delete[] bits;
@@ -354,12 +306,11 @@ int main(int argc, char* argv[]) {
         1,           // outputs
         {3030, 3},   // inputPacketSizes  [INT_DATA, rate_enc_len]
         {64, 64},    // inputBatchSizes
-        {130048},    // outputPacketSizes [IQ stacked: 508 blocks * 256 bytes]
+        {129024},    // outputPacketSizes [IQ stacked: 504 symbols * 256 bytes]
         {64},        // outputBatchSizes
         false,       // ltr
         true,        // startWithAll
-        "IEEE 802.11a QAM Mapper: interleaved bits -> freq-domain IQ blocks "
-        "(STS x2, LTS x2, SIGNAL, DATA)"
+        "IEEE 802.11a QAM Mapper: interleaved bits -> OFDM subcarrier IQ symbols"
     };
 
     run_manual_block(pipeIns, pipeOuts, config, process_qam_mapper, init_qam_mapper);

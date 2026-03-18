@@ -175,9 +175,9 @@ int main(int argc, char* argv[]) {
         2,               // inputs
         2,               // outputs
         {1517, 3},       // inputPacketSizes  [lip+DATA(1517)@[0], SIGNAL(3)@[1]]
-        {6000, 6000},    // inputBatchSizes
+        {64, 64},    // inputBatchSizes
         {1517, 3},       // outputPacketSizes [lip+DATA(1517)@[0], SIGNAL(3)@[1]]
-        {6000, 6000},    // outputBatchSizes
+        {64, 64},    // outputBatchSizes
         true,            // ltr
         true,            // startWithAll
         "Descrambler: SIGNAL passthrough; lip from header; DATA descrambled up to lip bytes"

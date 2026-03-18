@@ -1,0 +1,8 @@
+[TIMING] batch=200 pkts=64
+  H2D    : 0.574 ms  (1512.0 KB)
+  Kernel : 17.773 ms
+  D2H    : 0.255 ms  (756.0 KB)
+  GPU tot: 18.602 ms
+  Batch  : 7.678 ms  => 100.0 Mbps
+  pairs  : 1548288 bytes (50% of max)
+
