@@ -1,5 +1,4 @@
 import { topologicalSort } from '../utils/blockUtils';
-import { generateCppHeader, generateCppServer } from '../utils/codeGenerator';
 
 export const useServerOperations = ({
   blocks,
@@ -29,56 +28,112 @@ export const useServerOperations = ({
         throw new Error('No connections found');
       }
 
-      addLog('info', 'Generating pipeline configuration...');
-      const sortedBlocks = topologicalSort(blocks, connections);
-      const headerContent = generateCppHeader(sortedBlocks, connections);
-      const serverContent = generateCppServer(sortedBlocks, connections);
-
       addLog('info', 'Creating directories...');
       await window.electronAPI.ensureDir(`${projectDir}/cpp`);
       await window.electronAPI.ensureDir(`${projectDir}/blocks`);
 
-      // Copy protocol helper
-      addLog('info', 'Copying protocol helper...');
-      // Note: You'll need to ensure send_protocol_message.m is in your blocks folder
-
-      addLog('info', 'Writing pipeline_config.h...');
-      await window.electronAPI.writeFile(
-        `${projectDir}/cpp/pipeline_config.h`,
-        headerContent
-      );
-
-      addLog('info', 'Writing pipe_server.cpp...');
-      await window.electronAPI.writeFile(
-        `${projectDir}/cpp/pipe_server.cpp`,
-        serverContent
-      );
-
-      addLog('info', 'Compiling MEX file...');
-      const mexResult = await window.electronAPI.execCommand(
-        'matlab -batch "mex pipeline_mex.cpp"',
-        `${projectDir}/cpp`
-      );
-
-      if (!mexResult.success) {
-        throw new Error(`MEX compilation failed:\n${mexResult.stderr || mexResult.error}`);
+      // Check if MEX file exists
+      const platform = await window.electronAPI.getPlatform();
+      const mexExtension = platform === 'win32' ? 'mexw64' : (platform === 'darwin' ? 'mexmaci64' : 'mexa64');
+      const mexPath = `${projectDir}/cpp/pipeline_mex.${mexExtension}`;
+      
+      let mexExists = false;
+      try {
+        await window.electronAPI.readFile(mexPath);
+        mexExists = true;
+        addLog('success', 'Found existing MEX file - skipping compilation');
+      } catch (e) {
+        addLog('info', 'MEX file not found - will compile');
       }
-      addLog('success', 'MEX compiled successfully');
 
-      addLog('info', 'Compiling pipe server...');
-      const cppResult = await window.electronAPI.execCommand(
-        'g++ -o pipe_server.exe pipe_server.cpp -lkernel32 -O2',
-        `${projectDir}/cpp`
-      );
+      if (!mexExists) {
+        // Check if pipeline_mex.cpp exists
+        const cppSourcePath = `${projectDir}/cpp/pipeline_mex.cpp`;
+        let sourceExists = false;
+        try {
+          await window.electronAPI.readFile(cppSourcePath);
+          sourceExists = true;
+        } catch (e) {
+          throw new Error('pipeline_mex.cpp not found in cpp/ folder. Please add the pipeline_mex.cpp file to the cpp/ directory.');
+        }
 
-      if (!cppResult.success) {
-        throw new Error(`C++ compilation failed:\n${cppResult.stderr || cppResult.error}`);
+        if (sourceExists) {
+          addLog('info', 'Found pipeline_mex.cpp - compiling MEX file...');
+          const mexResult = await window.electronAPI.execCommand(
+            'matlab -batch "mex pipeline_mex.cpp"',
+            `${projectDir}/cpp`
+          );
+
+          if (!mexResult.success) {
+            throw new Error(`MEX compilation failed:\n${mexResult.stderr || mexResult.error}\n\nMake sure MATLAB is installed and in your PATH.`);
+          }
+          addLog('success', 'MEX compiled successfully');
+        }
       }
-      addLog('success', 'Pipe server compiled');
 
-      addLog('info', 'Starting pipe server...');
+      // Check if pipe_server.exe exists
+      const serverPath = `${projectDir}/cpp/pipe_server.exe`;
+      let serverExists = false;
+      try {
+        await window.electronAPI.readFile(serverPath);
+        serverExists = true;
+        addLog('success', 'Found existing pipe server - skipping compilation');
+      } catch (e) {
+        addLog('info', 'Pipe server not found - checking for source...');
+      }
+
+      if (!serverExists) {
+        // Check if pipe_server.cpp exists
+        const cppSourcePath = `${projectDir}/cpp/pipe_server.cpp`;
+        let sourceExists = false;
+        try {
+          await window.electronAPI.readFile(cppSourcePath);
+          sourceExists = true;
+        } catch (e) {
+          throw new Error('pipe_server.cpp not found in cpp/ folder. Please add the pipe_server.cpp file to the cpp/ directory.');
+        }
+
+        if (sourceExists) {
+          addLog('info', 'Found pipe_server.cpp - compiling...');
+          const cppResult = await window.electronAPI.execCommand(
+            'g++ -o pipe_server.exe pipe_server.cpp -lkernel32 -O2',
+            `${projectDir}/cpp`
+          );
+
+          if (!cppResult.success) {
+            throw new Error(`Pipe server compilation failed:\n${cppResult.stderr || cppResult.error}\n\nMake sure g++ is installed and in your PATH.`);
+          }
+          addLog('success', 'Pipe server compiled successfully');
+        }
+      }
+
+      // Build server command with parameters
+      const sortedBlocks = topologicalSort(blocks, connections);
+      const pipes = connections.map((_, i) => `GlobalP${i + 1}`);
+      
+      let serverCmd = `pipe_server.exe ${connections.length}`;
+      
+      connections.forEach((conn, i) => {
+        const fromBlock = sortedBlocks.find(b => b.id === conn.fromBlock);
+        
+        // Get size for specific output port
+        let size = 67108864; // default 64MB
+        if (fromBlock) {
+          if (Array.isArray(fromBlock.outputSize)) {
+            size = fromBlock.outputSize[conn.fromPort] || fromBlock.outputSize[0] || size;
+          } else {
+            size = fromBlock.outputSize || size;
+          }
+        }
+        
+        serverCmd += ` ${pipes[i]} ${size}`;
+      });
+
+      addLog('info', `Starting parameterized pipe server...`);
+      addLog('info', `Command: ${serverCmd}`);
+      
       const serverProc = await window.electronAPI.startProcess(
-        'pipe_server.exe',
+        serverCmd,
         `${projectDir}/cpp`,
         'server'
       );
@@ -147,28 +202,8 @@ export const useServerOperations = ({
 
     try {
       addLog('info', '========================================');
-      addLog('info', 'DEBUG: Starting block launch sequence...');
-      addLog('info', '========================================');
-      
-      // DEBUG: Log all blocks and their startWithAll status
-      addLog('info', `DEBUG: Total blocks in system: ${blocks.length}`);
-      blocks.forEach((block, idx) => {
-        addLog('info', `DEBUG: Block ${idx + 1}: ${block.name}`);
-        addLog('info', `  - ID: ${block.id}`);
-        addLog('info', `  - fileName: ${block.fileName}`);
-        addLog('info', `  - startWithAll: ${block.startWithAll} (type: ${typeof block.startWithAll})`);
-        addLog('info', `  - inputs: ${block.inputs}, outputs: ${block.outputs}`);
-        console.log(`[DEBUG] Block: ${block.name}`, {
-          id: block.id,
-          startWithAll: block.startWithAll,
-          type: typeof block.startWithAll,
-          config: block.config,
-          fullBlock: block
-        });
-      });
-      
-      addLog('info', '========================================');
       addLog('info', 'Starting all blocks with startWithAll=true...');
+      addLog('info', '========================================');
       
       for (const block of blocks) {
         await window.electronAPI.writeFile(
@@ -179,22 +214,14 @@ export const useServerOperations = ({
 
       const sortedBlocks = topologicalSort(blocks, connections);
       
-      addLog('info', `DEBUG: Topologically sorted ${sortedBlocks.length} blocks`);
-      sortedBlocks.forEach((block, idx) => {
-        addLog('info', `DEBUG: Sorted order ${idx + 1}: ${block.name} (startWithAll: ${block.startWithAll})`);
-      });
-
       let startedCount = 0;
       let skippedCount = 0;
 
       for (let i = 0; i < sortedBlocks.length; i++) {
         const block = sortedBlocks[i];
         
-        addLog('info', `DEBUG: Processing block ${i + 1}/${sortedBlocks.length}: ${block.name}`);
-        addLog('info', `DEBUG: startWithAll value: ${block.startWithAll}, type: ${typeof block.startWithAll}`);
-        
         if (!block.startWithAll) {
-          addLog('info', `Skipping ${block.name} (startWithAll=${block.startWithAll})`);
+          addLog('info', `Skipping ${block.name} (startWithAll=false)`);
           skippedCount++;
           continue;
         }
@@ -203,16 +230,13 @@ export const useServerOperations = ({
           const matlabCmd = buildBlockCommand(block, connections);
           
           addLog('info', `Starting ${block.name}...`);
-          addLog('info', `DEBUG: MATLAB command: ${matlabCmd}`);
           
-          // FIX: Get platform from the API instead of using process directly
           const platform = await window.electronAPI.getPlatform();
           const envCmd = platform === 'win32' 
             ? `set BLOCK_ID=${block.id} && `
             : `export BLOCK_ID=${block.id} && `;
           
           const fullCommand = `${envCmd}matlab -batch "cd('${projectDir}/blocks'); addpath('${projectDir}/cpp'); ${matlabCmd}"`;
-          addLog('info', `DEBUG: Full command: ${fullCommand}`);
           
           const procResult = await window.electronAPI.startProcess(
             fullCommand,
@@ -221,7 +245,6 @@ export const useServerOperations = ({
           );
 
           if (procResult.success) {
-            // Don't mark as running yet - wait for BLOCK_READY protocol message
             setBlockProcesses(prev => ({
               ...prev,
               [block.id]: {
@@ -239,7 +262,6 @@ export const useServerOperations = ({
           await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (err) {
           addLog('error', `Failed to start ${block.name}: ${err.message}`);
-          console.error(`[DEBUG] Error starting ${block.name}:`, err);
         }
       }
 
@@ -248,7 +270,6 @@ export const useServerOperations = ({
       addLog('info', '========================================');
     } catch (err) {
       addLog('error', `Block start failed: ${err.message}`);
-      console.error('[DEBUG] handleStart error:', err);
       alert('Failed to start blocks:\n' + err.message);
     }
   };
@@ -257,11 +278,6 @@ export const useServerOperations = ({
     addLog('info', 'Stopping all blocks with startWithAll=true...');
     
     const blocksToStop = blocks.filter(b => b.startWithAll);
-    
-    addLog('info', `DEBUG: Found ${blocksToStop.length} blocks to stop`);
-    blocksToStop.forEach(block => {
-      addLog('info', `DEBUG: Will stop: ${block.name} (ID: ${block.id})`);
-    });
     
     for (const block of blocksToStop) {
       const processInfo = blockProcesses[block.id];
@@ -273,8 +289,6 @@ export const useServerOperations = ({
         } else {
           addLog('error', `Failed to stop ${block.name}: ${result.error}`);
         }
-      } else {
-        addLog('warning', `DEBUG: No process info found for ${block.name} (ID: ${block.id})`);
       }
     }
     
@@ -319,8 +333,7 @@ export const useServerOperations = ({
     }
 
     try {
-      addLog('info', `DEBUG: Manually starting block: ${block.name}`);
-      addLog('info', `DEBUG: Block startWithAll: ${block.startWithAll}`);
+      addLog('info', `Manually starting block: ${block.name}`);
       
       const sortedBlocks = topologicalSort(blocks, connections);
 
@@ -333,7 +346,6 @@ export const useServerOperations = ({
 
       addLog('info', `Starting ${block.name}...`);
       
-      // FIX: Get platform from the API instead of using process directly
       const platform = await window.electronAPI.getPlatform();
       const envCmd = platform === 'win32' 
         ? `set BLOCK_ID=${block.id} && `
@@ -356,7 +368,6 @@ export const useServerOperations = ({
       }
     } catch (err) {
       addLog('error', `Failed to start ${block.name}: ${err.message}`);
-      console.error('[DEBUG] handleStartBlock error:', err);
     }
   };
 

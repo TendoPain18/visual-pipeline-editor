@@ -396,3 +396,4 @@ export const CanvasRenderer = ({
 
   return null;
 };
+

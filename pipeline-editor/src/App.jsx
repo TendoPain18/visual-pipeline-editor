@@ -53,7 +53,7 @@ const PipelineEditor = () => {
     setBlockMetrics,
     graphData,
     setGraphData,
-    blockStatus // NEW: Block status from protocol
+    blockStatus
   } = useProcessManager(addLog);
 
   const {
@@ -261,55 +261,71 @@ const PipelineEditor = () => {
 
   const handleSaveBlockCode = (updatedCode) => {
     const block = selectedBlocks[0];
-    const reparsedData = parseMatlabBlock(updatedCode, block.fileName);
-    const newPortPositions = calculatePortPositions(
-      reparsedData.inputs, 
-      reparsedData.outputs, 
-      reparsedData.ltr,
-      BLOCK_WIDTH,
-      BLOCK_HEIGHT,
-      GRID_SIZE
-    );
     
-    const updatedBlock = { 
-      ...block, 
-      code: updatedCode,
-      inputs: reparsedData.inputs,
-      outputs: reparsedData.outputs,
-      config: reparsedData.config,
-      sizeRelation: reparsedData.sizeRelation,
-      inputSize: reparsedData.inputSize,
-      outputSize: reparsedData.outputSize,
-      portPositions: newPortPositions,
-      ltr: reparsedData.ltr,
-      startWithAll: reparsedData.startWithAll,
-      isGraph: reparsedData.isGraph,
-      graphType: reparsedData.graphType
-    };
-    
-    const removedConnections = connections.filter(conn => {
-      if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) {
-        return true;
+    try {
+      // Re-parse the block to get updated configuration
+      const reparsedData = parseMatlabBlock(updatedCode, block.fileName);
+      
+      // Calculate new port positions based on updated inputs/outputs
+      const newPortPositions = calculatePortPositions(
+        reparsedData.inputs, 
+        reparsedData.outputs, 
+        reparsedData.ltr,
+        BLOCK_WIDTH,
+        BLOCK_HEIGHT,
+        GRID_SIZE
+      );
+      
+      // Create updated block with ALL new properties from parsed config
+      const updatedBlock = { 
+        ...block, 
+        code: updatedCode,
+        name: reparsedData.name,
+        inputs: reparsedData.inputs,
+        outputs: reparsedData.outputs,
+        config: reparsedData.config,
+        sizeRelation: reparsedData.sizeRelation,
+        inputSize: reparsedData.inputSize,
+        outputSize: reparsedData.outputSize,
+        inputSizes: reparsedData.inputSizes,
+        outputSizes: reparsedData.outputSizes,
+        portPositions: newPortPositions,
+        ltr: reparsedData.ltr,
+        startWithAll: reparsedData.startWithAll,
+        isGraph: reparsedData.isGraph,
+        graphType: reparsedData.graphType,
+        description: reparsedData.description
+      };
+      
+      // Find connections that need to be removed due to port changes
+      const removedConnections = connections.filter(conn => {
+        if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) {
+          return true;
+        }
+        if (conn.toBlock === block.id && conn.toPort >= reparsedData.inputs) {
+          return true;
+        }
+        return false;
+      });
+      
+      // Update blocks array
+      const newBlocks = blocks.map(b => b.id === block.id ? updatedBlock : b);
+      const newConnections = connections.filter(conn => !removedConnections.includes(conn));
+      
+      if (removedConnections.length > 0) {
+        addLog('warning', `Removed ${removedConnections.length} connection(s) due to port changes`);
+        updateBothWithHistory(newBlocks, newConnections);
+      } else {
+        updateBlocksWithHistory(newBlocks);
       }
-      if (conn.toBlock === block.id && conn.toPort >= reparsedData.inputs) {
-        return true;
-      }
-      return false;
-    });
-    
-    const newBlocks = blocks.map(b => b.id === block.id ? updatedBlock : b);
-    const newConnections = connections.filter(conn => !removedConnections.includes(conn));
-    
-    if (removedConnections.length > 0) {
-      addLog('warning', `Removed ${removedConnections.length} connection(s) due to port changes`);
-      updateBothWithHistory(newBlocks, newConnections);
-    } else {
-      updateBlocksWithHistory(newBlocks);
+      
+      setSelectedBlocks([updatedBlock]);
+      addLog('success', `Updated ${updatedBlock.name} - Applied new configuration`);
+      setIsEditingCode(false);
+    } catch (error) {
+      addLog('error', `Failed to parse updated code: ${error.message}`);
+      alert(`Error updating block:\n${error.message}\n\nPlease check your @BlockConfig section.`);
     }
-    
-    setSelectedBlocks([updatedBlock]);
-    addLog('success', `Updated code for block ${block.name}`);
-    setIsEditingCode(false);
   };
 
   const handleCanvasClickWithButtons = (e) => {
@@ -319,8 +335,8 @@ const PipelineEditor = () => {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       
-      const buttonSize = 20; // Updated to match new button size
-      const padding = 6; // Updated to match new padding
+      const buttonSize = 20;
+      const padding = 6;
       const buttonX = hoveredBlock.x + padding;
       const buttonY = hoveredBlock.y + padding;
       
@@ -362,13 +378,14 @@ const PipelineEditor = () => {
         connections={connections}
         serverRunning={serverRunning}
         blockProcesses={blockProcesses}
-        blockStatus={blockStatus} // NEW: Pass block status
+        blockStatus={blockStatus}
         executionLog={executionLog}
         onEditCode={handleEditBlockCode}
         onDelete={handleDelete}
         onBlockColorChange={(block, color) => {
           const updated = { ...block, color };
-          setBlocks(blocks.map(b => b.id === block.id ? updated : b));
+          const newBlocks = blocks.map(b => b.id === block.id ? updated : b);
+          updateBlocksWithHistory(newBlocks);
           setSelectedBlocks([updated]);
         }}
         onKillProcess={async (pid, name) => {
@@ -434,7 +451,7 @@ const PipelineEditor = () => {
             draggingWaypoint={draggingWaypoint}
             blockProcesses={blockProcesses}
             blockMetrics={blockMetrics}
-            blockStatus={blockStatus} // NEW: Pass block status
+            blockStatus={blockStatus}
             selectionBox={selectionBox}
             serverRunning={serverRunning}
           />

@@ -1,62 +1,65 @@
-function random_4bit(pipeOut)
-% RANDOM_4BIT - Generates random 4-bit numbers with protocol
+function crc_encode(pipeIn, pipeOut)
+% CRC_ENCODE - ITU-T CRC-32 encoder (continuous hardware-style operation)
 %
 % @BlockConfig
-% name: Random4Bit
-% inputs: 0
+% name: CrcEncode
+% inputs: 1
 % outputs: 1
-% inputSize: 0
-% outputSize: 8
+% inputSize: 1500
+% outputSize: 1504
 % LTR: true
 % startWithAll: true
-% minValue: 0
-% maxValue: 15
-% totalDataGB: 5
-% description: Generates random 4-bit numbers (0-15)
+% polynomial: 0x04C11DB7
+% description: CRC-32 encoder (ITU-T V.42) - continuous operation
 % @EndBlockConfig
 
     config = parse_block_config();
-    
-    % Send BLOCK_INIT
     send_protocol_message('BLOCK_INIT', config.blockId, config.name, '');
     
     fprintf('========================================\n');
-    fprintf('%s - Starting\n', config.name);
+    fprintf('CRC ENCODE - Continuous Mode\n');
     fprintf('========================================\n');
-    fprintf('Pipe Out:    %s\n', pipeOut);
-    fprintf('Range:       %d to %d\n', config.minValue, config.maxValue);
-    fprintf('Total Data:  %.1f GB\n', config.totalDataGB);
+    fprintf('Pipe In:     %s (%d bytes)\n', pipeIn, config.inputSize);
+    fprintf('Pipe Out:    %s (%d bytes)\n', pipeOut, config.outputSize);
+    fprintf('Polynomial:  0x%08X\n', config.polynomial);
     fprintf('========================================\n\n');
     
     try
-        % Send BLOCK_READY
+        % Build CRC-32 lookup table
+        fprintf('Building CRC-32 lookup table...\n');
+        crcTable = build_crc32_table();
+        fprintf('CRC table ready\n');
+        
         send_protocol_message('BLOCK_READY', config.blockId, config.name, '');
         
-        frameSize = config.outputSize;
-        totalFrames = ceil((config.totalDataGB * 1e9) / frameSize);
         frameCount = 0;
         totalBytes = 0;
         startTime = tic;
         lastTime = 0;
         lastBytes = 0;
         
-        fprintf('Will generate %d frames to reach %.1f GB\n\n', totalFrames, config.totalDataGB);
-        
-        for i = 1:totalFrames
-            % Generate random 4-bit number
-            randomValue = randi([config.minValue, config.maxValue], 1);
+        % CONTINUOUS OPERATION - Never exits
+        while true
+            % Read input (1500 bytes as int8)
+            inputData = pipeline_mex('read', pipeIn, config.inputSize);
             
-            % Convert to int8 array
-            outputData = int8(zeros(8, 1));
-            outputData(1) = int8(randomValue);
+            % Calculate CRC on the int8 data by treating as uint8
+            dataAsUint8 = typecast(inputData, 'uint8');
+            crc32 = calculate_crc32(dataAsUint8, crcTable);
             
-            % Write to pipe (blocks until pipe is ready)
+            % Create output (1504 bytes = 1500 data + 4 CRC)
+            outputData = zeros(config.outputSize, 1, 'int8');
+            outputData(1:config.inputSize) = inputData;
+            
+            % Append CRC as 4 bytes (little-endian)
+            crcBytes = typecast(uint32(crc32), 'uint8');
+            outputData(1501:1504) = typecast(crcBytes, 'int8');
+            
             pipeline_mex('write', pipeOut, outputData);
             
             frameCount = frameCount + 1;
             totalBytes = totalBytes + length(outputData);
             
-            % Calculate instantaneous throughput (per frame)
             currentTime = toc(startTime);
             elapsed = currentTime - lastTime;
             if elapsed > 0
@@ -67,23 +70,11 @@ function random_4bit(pipeOut)
             lastTime = currentTime;
             lastBytes = totalBytes;
             
-            % Send metrics every frame
             metrics = struct();
             metrics.frames = frameCount;
-            metrics.totalFrames = totalFrames;
             metrics.gbps = instantGbps;
-            metrics.totalGB = totalBytes / 1e9;
-            
             send_protocol_message('BLOCK_METRICS', config.blockId, config.name, metrics);
         end
-        
-        fprintf('\n\n%s: Complete - %.2f GB transmitted\n', config.name, totalBytes/1e9);
-        
-        % Send final BLOCK_STOPPED message
-        send_protocol_message('BLOCK_STOPPED', config.blockId, config.name, '');
-        
-        % Exit cleanly
-        return;
         
     catch ME
         send_protocol_message('BLOCK_ERROR', config.blockId, config.name, ME.message);
@@ -91,50 +82,63 @@ function random_4bit(pipeOut)
     end
 end
 
+function crcTable = build_crc32_table()
+    poly = uint32(0xEDB88320);
+    crcTable = zeros(256, 1, 'uint32');
+    for i = 0:255
+        crc = uint32(i);
+        for j = 0:7
+            if bitand(crc, uint32(1))
+                crc = bitxor(bitshift(crc, -1), poly);
+            else
+                crc = bitshift(crc, -1);
+            end
+        end
+        crcTable(i + 1) = crc;
+    end
+end
+
+function crc = calculate_crc32(data, crcTable)
+    crc = uint32(0xFFFFFFFF);
+    for i = 1:length(data)
+        tableIdx = bitxor(bitand(crc, uint32(0xFF)), uint32(data(i))) + 1;
+        crc = bitxor(bitshift(crc, -8), crcTable(tableIdx));
+    end
+    crc = bitxor(crc, uint32(0xFFFFFFFF));
+end
+
 function config = parse_block_config()
     filePath = mfilename('fullpath');
     fid = fopen([filePath '.m'], 'r');
     if fid == -1, error('Cannot open configuration file'); end
-    
     content = fread(fid, '*char')';
     fclose(fid);
-    
     startMarker = '@BlockConfig';
     endMarker = '@EndBlockConfig';
-    
     startIdx = strfind(content, startMarker);
     endIdx = strfind(content, endMarker);
-    
     if isempty(startIdx) || isempty(endIdx)
         error('No @BlockConfig section found');
     end
-    
     configStart = startIdx(1) + length(startMarker);
     configEnd = endIdx(1) - 1;
     configText = content(configStart:configEnd);
-    
     config = struct();
     lines = strsplit(configText, newline);
-    
     for i = 1:length(lines)
         line = strtrim(lines{i});
         if isempty(line), continue; end
         if line(1) == '%', line = strtrim(line(2:end)); end
         if isempty(line), continue; end
-        
         colonIdx = strfind(line, ':');
         if isempty(colonIdx), continue; end
-        
         key = strtrim(line(1:colonIdx(1)-1));
         value = strtrim(line(colonIdx(1)+1:end));
-        
         commentIdx = strfind(value, '%');
         if ~isempty(commentIdx)
             value = strtrim(value(1:commentIdx(1)-1));
         end
-        
         if isempty(key), continue; end
-        
         try
             numValue = eval(value);
             config.(key) = numValue;
@@ -142,14 +146,12 @@ function config = parse_block_config()
             config.(key) = value;
         end
     end
-    
     blockIdStr = getenv('BLOCK_ID');
     if isempty(blockIdStr)
         config.blockId = 0;
     else
         config.blockId = str2double(blockIdStr);
     end
-    
     requiredFields = {'name', 'inputs', 'outputs', 'inputSize', 'outputSize'};
     for i = 1:length(requiredFields)
         if ~isfield(config, requiredFields{i})

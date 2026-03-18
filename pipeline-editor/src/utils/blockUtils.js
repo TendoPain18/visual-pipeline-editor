@@ -124,7 +124,8 @@ export const parseMatlabBlock = (fileContent, fileName) => {
 };
 
 export const generateColor = (name) => {
-  const colors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1'];
+  // const colors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1'];
+  const colors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#6366f1'];
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = name.charCodeAt(i) + ((hash << 5) - hash);
@@ -189,23 +190,37 @@ export const topologicalSort = (blocks, connections) => {
   
   console.log(`[TopologicalSort] Found ${sources.length} source block(s):`, sources.map(s => s.name));
   
-  // Start with all source blocks
-  const sorted = [...sources];
-  const visited = new Set(sources.map(s => s.id));
+  // IGNORE FEEDBACK CONNECTIONS for topological sort
+  // Identify feedback connections (connections that go "backwards")
+  const feedbackConnections = new Set();
   
-  // Build adjacency map for faster lookups
+  // Build a forward-only adjacency map
   const adjacencyMap = new Map();
   blocks.forEach(block => {
     adjacencyMap.set(block.id, []);
   });
   
   connections.forEach(conn => {
-    if (adjacencyMap.has(conn.fromBlock)) {
-      adjacencyMap.get(conn.fromBlock).push(conn.toBlock);
+    const toBlock = blocks.find(b => b.id === conn.toBlock);
+    
+    // Mark as feedback if going to InterleaverAdapter's input 3 (index 2)
+    if (toBlock && toBlock.name === 'InterleaverAdapter' && conn.toPort === 2) {
+      feedbackConnections.add(conn.id);
+      console.log(`[TopologicalSort] Ignoring feedback connection: ${conn.id} (PpduDecapsulate -> InterleaverAdapter)`);
+    } else {
+      // Normal forward connection
+      if (adjacencyMap.has(conn.fromBlock)) {
+        adjacencyMap.get(conn.fromBlock).push(conn.toBlock);
+      }
     }
   });
   
-  console.log('[TopologicalSort] Adjacency map:', Object.fromEntries(adjacencyMap));
+  console.log('[TopologicalSort] Adjacency map (without feedback):', Object.fromEntries(adjacencyMap));
+  console.log(`[TopologicalSort] Ignored ${feedbackConnections.size} feedback connection(s)`);
+  
+  // Start with all source blocks
+  const sorted = [...sources];
+  const visited = new Set(sources.map(s => s.id));
   
   // Process blocks level by level
   let currentLevel = [...sources];
@@ -221,21 +236,32 @@ export const topologicalSort = (blocks, connections) => {
       
       for (const targetId of connectedBlockIds) {
         if (!visited.has(targetId)) {
-          // Check if all inputs to this block have been visited
+          // Check if all FORWARD inputs to this block have been visited
           const targetBlock = blocks.find(b => b.id === targetId);
-          const inputConnections = connections.filter(c => c.toBlock === targetId);
+          
+          // Get only non-feedback input connections
+          const inputConnections = connections.filter(c => {
+            // Only count this connection if:
+            // 1. It goes TO this target block
+            // 2. It's NOT a feedback connection
+            const isFeedback = feedbackConnections.has(c.id);
+            return c.toBlock === targetId && !isFeedback;
+          });
           
           const allInputsReady = inputConnections.every(conn => 
             visited.has(conn.fromBlock)
           );
           
           if (allInputsReady) {
-            console.log(`[TopologicalSort] Adding ${targetBlock.name} (all inputs ready)`);
+            console.log(`[TopologicalSort] Adding ${targetBlock.name} (all forward inputs ready)`);
             visited.add(targetId);
             sorted.push(targetBlock);
             nextLevel.push(targetBlock);
           } else {
-            console.log(`[TopologicalSort] Skipping ${targetBlock.name} (waiting for inputs)`);
+            const waitingFor = inputConnections
+              .filter(conn => !visited.has(conn.fromBlock))
+              .map(conn => blocks.find(b => b.id === conn.fromBlock)?.name || conn.fromBlock);
+            console.log(`[TopologicalSort] Skipping ${targetBlock.name} (waiting for: ${waitingFor.join(', ')})`);
           }
         }
       }
@@ -250,7 +276,7 @@ export const topologicalSort = (blocks, connections) => {
     console.warn('[TopologicalSort] WARNING: Some blocks were not included in topological sort:', missing.map(b => b.name));
     console.warn('[TopologicalSort] These blocks may be disconnected or have circular dependencies');
   } else {
-    console.log('[TopologicalSort] All blocks successfully sorted');
+    console.log('[TopologicalSort] ✅ All blocks successfully sorted (feedback connections ignored)');
   }
   
   console.log('[TopologicalSort] Final order:', sorted.map(b => b.name));
