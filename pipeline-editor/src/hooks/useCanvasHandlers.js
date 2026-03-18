@@ -38,9 +38,6 @@ export const useCanvasHandlers = ({
   setSidebarMode,
   canvasRef
 }) => {
-  // Track initial positions for proper history management
-  const [dragStartPositions, setDragStartPositions] = useState(null);
-
   const handleCanvasClick = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -167,17 +164,6 @@ export const useCanvasHandlers = ({
     setBlocks(newBlocks);
     
     setDraggingBlock(block);
-    
-    // Save initial positions for ALL blocks that will move
-    if (selectedBlocks.find(b => b.id === block.id)) {
-      const initialPositions = {};
-      selectedBlocks.forEach(b => {
-        initialPositions[b.id] = { x: b.x, y: b.y };
-      });
-      setDragStartPositions(initialPositions);
-    } else {
-      setDragStartPositions({ [block.id]: { x: block.x, y: block.y } });
-    }
     
     if (e.ctrlKey || e.metaKey) {
       if (selectedBlocks.find(b => b.id === block.id)) {
@@ -343,21 +329,11 @@ export const useCanvasHandlers = ({
   };
 
   const handleMouseUp = () => {
-    if (draggingBlock || draggingWaypoint) {
-      // Only save to history if positions actually changed
-      if (dragStartPositions) {
-        let hasChanged = false;
-        Object.entries(dragStartPositions).forEach(([id, startPos]) => {
-          const block = blocks.find(b => b.id === parseInt(id));
-          if (block && (block.x !== startPos.x || block.y !== startPos.y)) {
-            hasChanged = true;
-          }
-        });
-        
-        if (hasChanged) {
-          saveToHistory(blocks, connections);
-        }
-      }
+    if (draggingBlock) {
+      saveToHistory(blocks, connections);
+    }
+    if (draggingWaypoint) {
+      saveToHistory(blocks, connections);
     }
     if (isSelecting) {
       setIsSelecting(false);
@@ -366,7 +342,6 @@ export const useCanvasHandlers = ({
     }
     setDraggingBlock(null);
     setDraggingWaypoint(null);
-    setDragStartPositions(null);
   };
 
   const handleRightClick = (e) => {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileCode, Trash2, Wifi, WifiOff } from 'lucide-react';
+import { FileCode, Trash2 } from 'lucide-react';
 
 export const Sidebar = ({ 
   sidebarMode,
@@ -9,8 +9,6 @@ export const Sidebar = ({
   serverRunning,
   blockProcesses,
   executionLog,
-  socketConnected,
-  instanceConfig,
   onEditCode,
   onDelete,
   onBlockColorChange,
@@ -21,13 +19,7 @@ export const Sidebar = ({
     <div className="w-96 bg-white border-r border-gray-300 flex flex-col flex-shrink-0">
       <div className="p-4 border-b border-gray-300 bg-gradient-to-r from-blue-600 to-purple-600">
         <h2 className="text-xl font-bold text-white">Pipeline System Designer</h2>
-        <p className="text-sm text-blue-100 mt-1">Block Diagram Editor</p>
-        {instanceConfig && (
-          <div className="mt-2 text-xs text-blue-50 font-mono">
-            <div>Instance: {instanceConfig.instanceId.substring(0, 16)}...</div>
-            <div>Server Port: {instanceConfig.serverPort}</div>
-          </div>
-        )}
+        <p className="text-sm text-blue-100 mt-1">MATLAB Block Diagram Editor</p>
       </div>
       
       <div className="flex-1 overflow-auto p-4">
@@ -93,21 +85,6 @@ export const Sidebar = ({
             <div className="mb-4">
               <h3 className="font-semibold text-lg text-gray-800 mb-2">System Status</h3>
               <div className="bg-gray-50 rounded-lg p-3 space-y-2 text-sm">
-                {instanceConfig && (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-gray-700">Instance ID:</span>
-                      <span className="font-mono text-xs text-gray-900" title={instanceConfig.instanceId}>
-                        {instanceConfig.instanceId.substring(0, 12)}...
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-700">Server Port:</span>
-                      <span className="font-semibold text-gray-900">{instanceConfig.serverPort}</span>
-                    </div>
-                    <div className="border-t border-gray-200 my-2"></div>
-                  </>
-                )}
                 <div className="flex justify-between">
                   <span className="text-gray-700">Blocks:</span>
                   <span className="font-semibold text-gray-900">{blocks.length}</span>
@@ -121,22 +98,6 @@ export const Sidebar = ({
                   <span className={`font-semibold ${serverRunning ? 'text-green-600' : 'text-red-600'}`}>
                     {serverRunning ? 'Running' : 'Stopped'}
                   </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-700">Socket:</span>
-                  <div className="flex items-center gap-2">
-                    {socketConnected ? (
-                      <>
-                        <Wifi size={16} className="text-green-600" />
-                        <span className="font-semibold text-green-600">Connected</span>
-                      </>
-                    ) : (
-                      <>
-                        <WifiOff size={16} className="text-gray-400" />
-                        <span className="font-semibold text-gray-400">Disconnected</span>
-                      </>
-                    )}
-                  </div>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-700">Active Processes:</span>

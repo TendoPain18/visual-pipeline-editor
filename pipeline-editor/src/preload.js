@@ -1,10 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // Instance configuration
-  getInstanceConfig: () => ipcRenderer.invoke('get-instance-config'),
-  getNextBlockId: () => ipcRenderer.invoke('get-next-block-id'),
-  
   // File operations
   readFile: (filepath) => ipcRenderer.invoke('read-file', filepath),
   writeFile: (filepath, content) => ipcRenderer.invoke('write-file', filepath, content),
@@ -20,10 +16,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getRunningProcesses: () => ipcRenderer.invoke('get-running-processes'),
   killAllProcesses: () => ipcRenderer.invoke('kill-all-processes'),
   
-  // Server with socket communication
-  startServerWithSocket: (command, cwd, processName) => ipcRenderer.invoke('start-server-with-socket', command, cwd, processName),
-  sendToServer: (message) => ipcRenderer.invoke('send-to-server', message),
-  
   // Directory operations
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   ensureDir: (dirpath) => ipcRenderer.invoke('ensure-dir', dirpath),
@@ -38,30 +30,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('process-output', subscription);
     return () => ipcRenderer.removeListener('process-output', subscription);
   },
-  
-  // Listen to server messages via socket
-  onServerMessage: (callback) => {
-    const subscription = (event, data) => callback(data);
-    ipcRenderer.on('server-message', subscription);
-    return () => ipcRenderer.removeListener('server-message', subscription);
-  },
-  
-  // Listen to block messages (MATLAB/C++/Python) via language-specific sockets
-  onBlockMessage: (callback) => {
-    const subscription = (event, data) => callback(data);
-    ipcRenderer.on('block-message', subscription);
-    return () => ipcRenderer.removeListener('block-message', subscription);
-  },
-  
-  // Listen to socket connection status
-  onServerSocketStatus: (callback) => {
-    const subscription = (event, data) => callback(data);
-    ipcRenderer.on('server-socket-status', subscription);
-    return () => ipcRenderer.removeListener('server-socket-status', subscription);
-  },
-  
-  removeProcessOutputListener: () => ipcRenderer.removeAllListeners('process-output'),
-  removeServerMessageListener: () => ipcRenderer.removeAllListeners('server-message'),
-  removeBlockMessageListener: () => ipcRenderer.removeAllListeners('block-message'),
-  removeServerSocketStatusListener: () => ipcRenderer.removeAllListeners('server-socket-status')
+  removeProcessOutputListener: () => ipcRenderer.removeAllListeners('process-output')
 });

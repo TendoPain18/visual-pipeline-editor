@@ -9,10 +9,9 @@ import { useProcessManager } from './hooks/useProcessManager';
 import { useCanvasInteraction } from './hooks/useCanvasInteraction';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useFileOperations } from './hooks/useFileOperations';
-import { useServerOperations, signalBlockReady, signalBlockError } from './hooks/useServerOperations';
+import { useServerOperations } from './hooks/useServerOperations';
 import { useCanvasHandlers } from './hooks/useCanvasHandlers';
 import { GRID_SIZE, parseMatlabBlock, calculatePortPositions, BLOCK_WIDTH, BLOCK_HEIGHT } from './utils/blockUtils';
-import { parseCppBlock } from './utils/cppBlockUtils';
 
 const PipelineEditor = () => {
   const [sidebarMode, setSidebarMode] = useState(null);
@@ -23,15 +22,10 @@ const PipelineEditor = () => {
   const [executionLog, setExecutionLog] = useState([]);
   const [projectDir, setProjectDir] = useState('');
   const [clipboard, setClipboard] = useState(null);
-  const [isStarting, setIsStarting] = useState(false);
+  const [isStartingServer, setIsStartingServer] = useState(false);
   const [graphWindows, setGraphWindows] = useState({});
-  const [socketConnected, setSocketConnected] = useState(false);
-  const [instanceConfig, setInstanceConfig] = useState(null);
   
   const canvasRef = useRef(null);
-  const serverMessageListenerRef = useRef(null);
-  const socketStatusListenerRef = useRef(null);
-  const blockMessageListenerRef = useRef(null);
 
   const addLog = (type, message) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -59,8 +53,7 @@ const PipelineEditor = () => {
     setBlockMetrics,
     graphData,
     setGraphData,
-    blockStatus,
-    setBlockStatus
+    blockStatus // NEW: Block status from protocol
   } = useProcessManager(addLog);
 
   const {
@@ -106,20 +99,20 @@ const PipelineEditor = () => {
   });
 
   const {
-    handleStartAll,
-    handleStopAll,
+    handleStartServer,
+    handleStart,
+    handleStop,
+    handleTerminate,
     handleStartBlock,
     handleStopBlock
   } = useServerOperations({
     blocks,
     connections,
     projectDir,
-    instanceConfig,
     setServerRunning,
     setBlockProcesses,
-    setIsStarting,
-    addLog,
-    setBlockMetrics
+    setIsStartingServer,
+    addLog
   });
 
   const {
@@ -166,240 +159,14 @@ const PipelineEditor = () => {
     canvasRef
   });
 
-  // Get instance config and project directory on mount
   useEffect(() => {
-    const getConfig = async () => {
-      const config = await window.electronAPI.getInstanceConfig();
-      setInstanceConfig(config);
-      addLog('info', `Instance ID: ${config.instanceId}`);
-      addLog('info', `Server Port: ${config.serverPort}`);
-      addLog('info', `MATLAB Port: ${config.matlabPort}`);
-      addLog('info', `C++ Port:    ${config.cppPort}`);
-      
+    const getDir = async () => {
       const dir = await window.electronAPI.getAppPath();
       setProjectDir(dir);
     };
-    getConfig();
+    getDir();
   }, []);
 
-  // Listen to server socket messages
-  useEffect(() => {
-    if (serverMessageListenerRef.current) {
-      serverMessageListenerRef.current();
-    }
-    
-    serverMessageListenerRef.current = window.electronAPI.onServerMessage((message) => {
-      console.log('Server message received:', message);
-      
-      const { type, message: msg } = message;
-      
-      switch (type) {
-        case 'CONNECTED':
-          addLog('success', '🔌 Socket connected to server');
-          setSocketConnected(true);
-          break;
-          
-        case 'STATUS':
-          addLog('info', `[Server] ${msg}`);
-          break;
-          
-        case 'PIPE_CREATED':
-          addLog('success', `[Server] ${msg}`);
-          break;
-          
-        case 'READY':
-          addLog('success', `[Server] ${msg}`);
-          setServerRunning(true);
-          break;
-          
-        case 'ERROR':
-          addLog('error', `[Server] ${msg}`);
-          break;
-          
-        case 'HEARTBEAT':
-          console.log('[Server Heartbeat]');
-          break;
-          
-        case 'SHUTDOWN':
-          addLog('warning', `[Server] ${msg}`);
-          setServerRunning(false);
-          setSocketConnected(false);
-          break;
-          
-        default:
-          addLog('info', `[Server] ${type}: ${msg}`);
-      }
-    });
-    
-    return () => {
-      if (serverMessageListenerRef.current) {
-        serverMessageListenerRef.current();
-      }
-    };
-  }, []);
-
-  // Listen to socket connection status
-  useEffect(() => {
-    if (socketStatusListenerRef.current) {
-      socketStatusListenerRef.current();
-    }
-    
-    socketStatusListenerRef.current = window.electronAPI.onServerSocketStatus((status) => {
-      console.log('Socket status:', status);
-      
-      if (status.connected) {
-        setSocketConnected(true);
-        addLog('success', `Socket connected on port ${status.port || 9000}`);
-      } else {
-        setSocketConnected(false);
-        if (status.error) {
-          addLog('error', `Socket error: ${status.error}`);
-        } else {
-          addLog('warning', 'Socket disconnected');
-        }
-        setServerRunning(false);
-      }
-    });
-    
-    return () => {
-      if (socketStatusListenerRef.current) {
-        socketStatusListenerRef.current();
-      }
-    };
-  }, []);
-
-  // Listen to block messages (MATLAB/C++/Python) via language-specific socket servers
-  useEffect(() => {
-    if (blockMessageListenerRef.current) {
-      blockMessageListenerRef.current();
-    }
-    
-    blockMessageListenerRef.current = window.electronAPI.onBlockMessage((message) => {
-      console.log(`[${message.language}] Socket message:`, message);
-      
-      const { protocol, blockId, blockName, type, data, timestamp, language } = message;
-      
-      switch (type) {
-        case 'BLOCK_INIT':
-          addLog('info', `[${blockName}] [${language}] Initializing...`);
-          setBlockStatus(prev => ({ ...prev, [blockId]: 'initializing' }));
-          break;
-          
-        case 'BLOCK_READY':
-          addLog('success', `[${blockName}] [${language}] Ready`);
-          setBlockStatus(prev => ({ ...prev, [blockId]: 'ready' }));
-          // Signal the waiting Promise in useServerOperations directly.
-          signalBlockReady(blockId);
-          setBlockProcesses(prev => {
-            const blockEntry = Object.entries(prev).find(([key, proc]) => 
-              proc.name === blockName
-            );
-            if (blockEntry) {
-              const [key, proc] = blockEntry;
-              return {
-                ...prev,
-                [key]: { ...proc, status: 'running', language }
-              };
-            }
-            return prev;
-          });
-          break;
-          
-        case 'BLOCK_METRICS':
-          setBlockMetrics(prev => ({
-            ...prev,
-            [blockId]: {
-              frames: data.frames || 0,
-              gbps: data.gbps || 0,
-              totalGB: data.totalGB,
-              totalFrames: data.totalFrames
-            }
-          }));
-          break;
-          
-        case 'BLOCK_GRAPH':
-          // Single-point accumulating graph (existing behaviour — untouched)
-          const graphPoint = { x: data.x, y: data.y };
-          setGraphData(prev => {
-            const existing = prev[blockId] || { xData: [], yData: [] };
-            const maxPoints = 500;
-            
-            const newXData = [...existing.xData, graphPoint.x];
-            const newYData = [...existing.yData, graphPoint.y];
-            
-            if (newXData.length > maxPoints) {
-              newXData.shift();
-              newYData.shift();
-            }
-            
-            return {
-              ...prev,
-              [blockId]: {
-                xData: newXData,
-                yData: newYData
-              }
-            };
-          });
-          break;
-
-        case 'BLOCK_GRAPH_BATCH':
-          // Batch scatter plot — REPLACE previous points entirely (no accumulation).
-          // message.points is an array of [I, Q] pairs sent by scatter_plot.cpp.
-          // We store them as { xData: [...], yData: [...] } to reuse GraphWindow.
-          {
-            const incomingPoints = message.points || data?.points || [];
-            const xData = incomingPoints.map(p => p[0]);
-            const yData = incomingPoints.map(p => p[1]);
-
-            // Replace — not append
-            setGraphData(prev => ({
-              ...prev,
-              [blockId]: { xData, yData }
-            }));
-
-            // Auto-open a graph window for this block if not already open.
-            // We use blockName from the message (set to the C++ block's config.name).
-            setGraphWindows(prev => {
-              if (prev[blockId]) return prev;   // already open
-              return {
-                ...prev,
-                [blockId]: { blockName: blockName || `Block ${blockId}`, graphType: 'scatter' }
-              };
-            });
-          }
-          break;
-          
-        case 'BLOCK_ERROR':
-          addLog('error', `[${blockName}] [${language}] ${data.error || data.status || 'Error'}`);
-          setBlockStatus(prev => ({ ...prev, [blockId]: 'error' }));
-          // Reject the waiting Promise so startup doesn't hang on errored blocks
-          signalBlockError(blockId, data.error || data.status || 'Block error');
-          break;
-          
-        case 'BLOCK_STOPPING':
-          addLog('info', `[${blockName}] [${language}] Stopping...`);
-          setBlockStatus(prev => ({ ...prev, [blockId]: 'stopping' }));
-          break;
-          
-        case 'BLOCK_STOPPED':
-          addLog('info', `[${blockName}] [${language}] Stopped`);
-          setBlockStatus(prev => {
-            const newStatus = { ...prev };
-            delete newStatus[blockId];
-            return newStatus;
-          });
-          break;
-      }
-    });
-    
-    return () => {
-      if (blockMessageListenerRef.current) {
-        blockMessageListenerRef.current();
-      }
-    };
-  }, []);
-
-  // Auto-open graph windows for blocks flagged as isGraph (existing BLOCK_GRAPH flow)
   useEffect(() => {
     Object.entries(graphData).forEach(([blockId, data]) => {
       if (!graphWindows[blockId]) {
@@ -492,140 +259,57 @@ const PipelineEditor = () => {
     setIsEditingCode(true);
   };
 
-  const handleSaveBlockCode = async (updatedCode) => {
+  const handleSaveBlockCode = (updatedCode) => {
     const block = selectedBlocks[0];
+    const reparsedData = parseMatlabBlock(updatedCode, block.fileName);
+    const newPortPositions = calculatePortPositions(
+      reparsedData.inputs, 
+      reparsedData.outputs, 
+      reparsedData.ltr,
+      BLOCK_WIDTH,
+      BLOCK_HEIGHT,
+      GRID_SIZE
+    );
     
-    try {
-      // RE-PARSE the block with updated code based on language
-      let reparsedData;
-      if (block.language === 'matlab') {
-        reparsedData = parseMatlabBlock(updatedCode, block.fileName);
-      } else if (block.language === 'cpp') {
-        reparsedData = parseCppBlock(updatedCode, block.fileName);
-      } else {
-        throw new Error(`Unsupported language: ${block.language}`);
+    const updatedBlock = { 
+      ...block, 
+      code: updatedCode,
+      inputs: reparsedData.inputs,
+      outputs: reparsedData.outputs,
+      config: reparsedData.config,
+      sizeRelation: reparsedData.sizeRelation,
+      inputSize: reparsedData.inputSize,
+      outputSize: reparsedData.outputSize,
+      portPositions: newPortPositions,
+      ltr: reparsedData.ltr,
+      startWithAll: reparsedData.startWithAll,
+      isGraph: reparsedData.isGraph,
+      graphType: reparsedData.graphType
+    };
+    
+    const removedConnections = connections.filter(conn => {
+      if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) {
+        return true;
       }
-      
-      // Calculate new port positions
-      const newPortPositions = calculatePortPositions(
-        reparsedData.inputs, 
-        reparsedData.outputs, 
-        reparsedData.ltr,
-        BLOCK_WIDTH,
-        BLOCK_HEIGHT,
-        GRID_SIZE
-      );
-      
-      // Create updated block with ALL new batch processing fields
-      const updatedBlock = { 
-        ...block, 
-        code: updatedCode,
-        name: reparsedData.name,
-        inputs: reparsedData.inputs,
-        outputs: reparsedData.outputs,
-        config: reparsedData.config,
-        
-        // BATCH PROCESSING FIELDS
-        inputPacketSizes: reparsedData.inputPacketSizes,
-        inputBatchSizes: reparsedData.inputBatchSizes,
-        outputPacketSizes: reparsedData.outputPacketSizes,
-        outputBatchSizes: reparsedData.outputBatchSizes,
-        inputBufferSizes: reparsedData.inputBufferSizes,
-        outputBufferSizes: reparsedData.outputBufferSizes,
-        inputLengthBytes: reparsedData.inputLengthBytes,
-        outputLengthBytes: reparsedData.outputLengthBytes,
-        
-        // Legacy fields
-        sizeRelation: reparsedData.sizeRelation,
-        inputSize: reparsedData.inputSize,
-        outputSize: reparsedData.outputSize,
-        inputSizes: reparsedData.inputSizes,
-        outputSizes: reparsedData.outputSizes,
-        
-        portPositions: newPortPositions,
-        ltr: reparsedData.ltr,
-        startWithAll: reparsedData.startWithAll,
-        isGraph: reparsedData.isGraph,
-        graphType: reparsedData.graphType,
-        description: reparsedData.description,
-        language: reparsedData.language || block.language
-      };
-      
-      // Check if any connections need to be removed due to port changes
-      const removedConnections = connections.filter(conn => {
-        if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) {
-          return true;
-        }
-        if (conn.toBlock === block.id && conn.toPort >= reparsedData.inputs) {
-          return true;
-        }
-        return false;
-      });
-      
-      // Check if any existing connections have size mismatches
-      const invalidConnections = connections.filter(conn => {
-        if (conn.fromBlock === block.id) {
-          const toBlock = blocks.find(b => b.id === conn.toBlock);
-          if (toBlock) {
-            const outputPacketSize = reparsedData.outputPacketSizes[conn.fromPort];
-            const outputBatchSize = reparsedData.outputBatchSizes[conn.fromPort];
-            const inputPacketSize = toBlock.inputPacketSizes[conn.toPort];
-            const inputBatchSize = toBlock.inputBatchSizes[conn.toPort];
-            
-            if (outputPacketSize !== inputPacketSize || outputBatchSize !== inputBatchSize) {
-              return true;
-            }
-          }
-        }
-        
-        if (conn.toBlock === block.id) {
-          const fromBlock = blocks.find(b => b.id === conn.fromBlock);
-          if (fromBlock) {
-            const inputPacketSize = reparsedData.inputPacketSizes[conn.toPort];
-            const inputBatchSize = reparsedData.inputBatchSizes[conn.toPort];
-            const outputPacketSize = fromBlock.outputPacketSizes[conn.fromPort];
-            const outputBatchSize = fromBlock.outputBatchSizes[conn.fromPort];
-            
-            if (inputPacketSize !== outputPacketSize || inputBatchSize !== outputBatchSize) {
-              return true;
-            }
-          }
-        }
-        
-        return false;
-      });
-      
-      const allRemovedConnections = [...new Set([...removedConnections, ...invalidConnections])];
-      
-      const newBlocks = blocks.map(b => b.id === block.id ? updatedBlock : b);
-      const newConnections = connections.filter(conn => !allRemovedConnections.includes(conn));
-      
-      if (allRemovedConnections.length > 0) {
-        addLog('warning', `Removed ${allRemovedConnections.length} connection(s) due to port or size changes`);
-        updateBothWithHistory(newBlocks, newConnections);
-      } else {
-        updateBlocksWithHistory(newBlocks);
+      if (conn.toBlock === block.id && conn.toPort >= reparsedData.inputs) {
+        return true;
       }
-      
-      // SAVE TO DISK IMMEDIATELY
-      const filePath = block.language === 'matlab' 
-        ? `${projectDir}/matlab_blocks/${block.fileName}`
-        : `${projectDir}/cpp_blocks/${block.fileName}`;
-      
-      try {
-        await window.electronAPI.writeFile(filePath, updatedCode);
-        addLog('success', `Saved ${updatedBlock.name} to disk`);
-      } catch (err) {
-        addLog('error', `Failed to save to disk: ${err.message}`);
-      }
-      
-      setSelectedBlocks([updatedBlock]);
-      addLog('success', `Updated ${updatedBlock.name} - Applied new configuration`);
-      setIsEditingCode(false);
-    } catch (error) {
-      addLog('error', `Failed to parse updated code: ${error.message}`);
-      alert(`Error updating block:\n${error.message}\n\nPlease check your block configuration.`);
+      return false;
+    });
+    
+    const newBlocks = blocks.map(b => b.id === block.id ? updatedBlock : b);
+    const newConnections = connections.filter(conn => !removedConnections.includes(conn));
+    
+    if (removedConnections.length > 0) {
+      addLog('warning', `Removed ${removedConnections.length} connection(s) due to port changes`);
+      updateBothWithHistory(newBlocks, newConnections);
+    } else {
+      updateBlocksWithHistory(newBlocks);
     }
+    
+    setSelectedBlocks([updatedBlock]);
+    addLog('success', `Updated code for block ${block.name}`);
+    setIsEditingCode(false);
   };
 
   const handleCanvasClickWithButtons = (e) => {
@@ -635,8 +319,8 @@ const PipelineEditor = () => {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       
-      const buttonSize = 20;
-      const padding = 6;
+      const buttonSize = 20; // Updated to match new button size
+      const padding = 6; // Updated to match new padding
       const buttonX = hoveredBlock.x + padding;
       const buttonY = hoveredBlock.y + padding;
       
@@ -654,6 +338,7 @@ const PipelineEditor = () => {
     
     handleCanvasClick(e);
   };
+
 
   useKeyboardShortcuts({
     onUndo: handleUndo,
@@ -677,16 +362,13 @@ const PipelineEditor = () => {
         connections={connections}
         serverRunning={serverRunning}
         blockProcesses={blockProcesses}
-        blockStatus={blockStatus}
+        blockStatus={blockStatus} // NEW: Pass block status
         executionLog={executionLog}
-        socketConnected={socketConnected}
-        instanceConfig={instanceConfig}
         onEditCode={handleEditBlockCode}
         onDelete={handleDelete}
         onBlockColorChange={(block, color) => {
           const updated = { ...block, color };
-          const newBlocks = blocks.map(b => b.id === block.id ? updated : b);
-          updateBlocksWithHistory(newBlocks);
+          setBlocks(blocks.map(b => b.id === block.id ? updated : b));
           setSelectedBlocks([updated]);
         }}
         onKillProcess={async (pid, name) => {
@@ -700,8 +382,10 @@ const PipelineEditor = () => {
       
       <div className="flex-1 flex flex-col">
         <Toolbar
-          onStart={handleStartAll}
-          onStopAll={handleStopAll}
+          onStartServer={handleStartServer}
+          onStart={() => handleStart()}
+          onStop={() => handleStop(blockProcesses, setBlockMetrics)}
+          onTerminate={() => handleTerminate(setBlockMetrics)}
           onImport={async () => {
             const newBlocks = await handleFileUpload();
             if (newBlocks && newBlocks.length > 0) {
@@ -712,7 +396,7 @@ const PipelineEditor = () => {
           onLoad={handleLoadDiagram}
           onSave={handleSaveDiagram}
           serverRunning={serverRunning}
-          isStarting={isStarting}
+          isStartingServer={isStartingServer}
           hasProcesses={Object.keys(blockProcesses).length > 0}
         />
         
@@ -750,7 +434,7 @@ const PipelineEditor = () => {
             draggingWaypoint={draggingWaypoint}
             blockProcesses={blockProcesses}
             blockMetrics={blockMetrics}
-            blockStatus={blockStatus}
+            blockStatus={blockStatus} // NEW: Pass block status
             selectionBox={selectionBox}
             serverRunning={serverRunning}
           />

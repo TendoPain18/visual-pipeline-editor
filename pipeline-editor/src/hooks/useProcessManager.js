@@ -217,7 +217,6 @@ export const useProcessManager = (addLog) => {
     setBlockMetrics,
     graphData,
     setGraphData,
-    blockStatus,
-    setBlockStatus
+    blockStatus
   };
 };

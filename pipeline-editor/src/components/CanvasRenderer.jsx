@@ -72,7 +72,7 @@ export const CanvasRenderer = ({
         if (points.length === 2) {
           ctx.lineTo(points[1].x, points[1].y);
         } else {
-          const cornerRadius = 5;
+          const cornerRadius = 10;
           
           for (let i = 0; i < points.length - 1; i++) {
             const current = points[i];
@@ -396,4 +396,3 @@ export const CanvasRenderer = ({
 
   return null;
 };
-
