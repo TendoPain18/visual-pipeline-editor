@@ -25,6 +25,7 @@ const PipelineEditor = () => {
   const [isStartingServer, setIsStartingServer] = useState(false);
   const [graphWindows, setGraphWindows] = useState({});
   const [socketConnected, setSocketConnected] = useState(false);
+  const [instanceConfig, setInstanceConfig] = useState(null);
   
   const canvasRef = useRef(null);
   const serverMessageListenerRef = useRef(null);
@@ -113,6 +114,7 @@ const PipelineEditor = () => {
     blocks,
     connections,
     projectDir,
+    instanceConfig,
     setServerRunning,
     setBlockProcesses,
     setIsStartingServer,
@@ -163,13 +165,19 @@ const PipelineEditor = () => {
     canvasRef
   });
 
-  // Get project directory on mount
+  // Get instance config and project directory on mount
   useEffect(() => {
-    const getDir = async () => {
+    const getConfig = async () => {
+      const config = await window.electronAPI.getInstanceConfig();
+      setInstanceConfig(config);
+      addLog('info', `Instance ID: ${config.instanceId}`);
+      addLog('info', `Server Port: ${config.serverPort}`);
+      addLog('info', `MATLAB Port: ${config.matlabPort}`);
+      
       const dir = await window.electronAPI.getAppPath();
       setProjectDir(dir);
     };
-    getDir();
+    getConfig();
   }, []);
 
   // Listen to server socket messages
@@ -207,7 +215,6 @@ const PipelineEditor = () => {
           break;
           
         case 'HEARTBEAT':
-          // Don't log heartbeats to keep log clean
           console.log('[Server Heartbeat]');
           break;
           
@@ -275,7 +282,6 @@ const PipelineEditor = () => {
         case 'BLOCK_READY':
           addLog('success', `[${blockName}] Ready`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'ready' }));
-          // Mark as running in blockProcesses
           setBlockProcesses(prev => {
             const blockEntry = Object.entries(prev).find(([key, proc]) => 
               proc.name === blockName
@@ -560,6 +566,7 @@ const PipelineEditor = () => {
         blockStatus={blockStatus}
         executionLog={executionLog}
         socketConnected={socketConnected}
+        instanceConfig={instanceConfig}
         onEditCode={handleEditBlockCode}
         onDelete={handleDelete}
         onBlockColorChange={(block, color) => {

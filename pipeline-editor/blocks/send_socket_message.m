@@ -1,5 +1,5 @@
 function send_socket_message(socketObj, msgType, blockId, blockName, data)
-% SEND_SOCKET_MESSAGE - Send JSON message via socket (SOCKET-ONLY VERSION)
+% SEND_SOCKET_MESSAGE - Send JSON message via socket
 %
 % Usage:
 %   send_socket_message(socket, 'BLOCK_INIT', 123, 'FileSource', '')
@@ -30,6 +30,15 @@ function send_socket_message(socketObj, msgType, blockId, blockName, data)
     % Add data based on type
     switch msgType
         case 'BLOCK_INIT'
+            % KEY CHANGE: include this MATLAB process's real PID so Electron
+            % can register it with the pipe server for crash cleanup.
+            % feature('getpid') returns the PID of the current MATLAB process.
+            try
+                matlabPid = feature('getpid');
+            catch
+                matlabPid = 0;
+            end
+            msg.pid = matlabPid;
             msg.data = struct('status', 'initializing');
             
         case 'BLOCK_READY'

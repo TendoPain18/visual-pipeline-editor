@@ -4,6 +4,7 @@ export const useServerOperations = ({
   blocks,
   connections,
   projectDir,
+  instanceConfig,
   setServerRunning,
   setBlockProcesses,
   setIsStartingServer,
@@ -12,6 +13,11 @@ export const useServerOperations = ({
   const handleStartServer = async () => {
     if (!projectDir) {
       alert('Loading project directory...');
+      return;
+    }
+
+    if (!instanceConfig) {
+      alert('Instance configuration not loaded...');
       return;
     }
 
@@ -70,7 +76,7 @@ export const useServerOperations = ({
         }
       }
 
-      // Check if pipe_server.exe exists (socket version)
+      // Check if pipe_server.exe exists
       const serverPath = `${projectDir}/cpp/pipe_server.exe`;
       let serverExists = false;
       try {
@@ -105,11 +111,15 @@ export const useServerOperations = ({
         }
       }
 
-      // Build server command with parameters
+      // Build server command with INSTANCE-SPECIFIC parameters
       const sortedBlocks = topologicalSort(blocks, connections);
-      const pipes = connections.map((_, i) => `GlobalP${i + 1}`);
+      const instanceId = instanceConfig.instanceId;
+      const serverPort = instanceConfig.serverPort;
       
-      let serverCmd = `pipe_server.exe ${connections.length}`;
+      // Instance-specific pipe names
+      const pipes = connections.map((_, i) => `Instance_${instanceId}_P${i + 1}`);
+      
+      let serverCmd = `pipe_server.exe ${connections.length} ${serverPort}`;
       
       connections.forEach((conn, i) => {
         const fromBlock = sortedBlocks.find(b => b.id === conn.fromBlock);
@@ -126,10 +136,11 @@ export const useServerOperations = ({
         serverCmd += ` ${pipes[i]} ${size}`;
       });
 
-      addLog('info', `Starting parameterized pipe server with socket communication...`);
+      addLog('info', `Starting instance-specific pipe server...`);
+      addLog('info', `Instance ID: ${instanceId}`);
+      addLog('info', `Server Port: ${serverPort}`);
       addLog('info', `Command: ${serverCmd}`);
       
-      // Use the new socket-enabled server start
       const serverProc = await window.electronAPI.startServerWithSocket(
         serverCmd,
         `${projectDir}/cpp`,
@@ -145,7 +156,7 @@ export const useServerOperations = ({
         ...prev, 
         server: { pid: serverProc.pid, status: 'running', name: 'server' } 
       }));
-      addLog('success', `Pipe server started with socket communication (PID: ${serverProc.pid})`);
+      addLog('success', `Pipe server started (PID: ${serverProc.pid}, Port: ${serverPort})`);
       addLog('info', 'Waiting for socket connection...');
       
     } catch (err) {
@@ -156,8 +167,12 @@ export const useServerOperations = ({
     }
   };
 
-  const buildBlockCommand = (block, connections) => {
-    const pipes = connections.map((_, i) => `GlobalP${i + 1}`);
+  const buildBlockCommand = (block, connections, instanceConfig) => {
+    const instanceId = instanceConfig.instanceId;
+    const matlabPort = instanceConfig.matlabPort;
+    
+    // Instance-specific pipe names
+    const pipes = connections.map((_, i) => `Instance_${instanceId}_P${i + 1}`);
     const functionName = block.fileName.replace('.m', '');
     
     const inputConnections = connections.filter(c => c.toBlock === block.id)
@@ -221,6 +236,11 @@ export const useServerOperations = ({
       return;
     }
 
+    if (!instanceConfig) {
+      alert('Instance configuration not loaded...');
+      return;
+    }
+
     try {
       addLog('info', '========================================');
       addLog('info', 'Starting blocks sequentially (waiting for each to be ready)...');
@@ -249,16 +269,18 @@ export const useServerOperations = ({
         }
 
         try {
-          const matlabCmd = buildBlockCommand(block, connections);
+          const matlabCmd = buildBlockCommand(block, connections, instanceConfig);
           
           const currentBlockNum = startedCount + 1;
           const totalBlocks = blocksToStart.length;
           addLog('info', `[${currentBlockNum}/${totalBlocks}] Starting ${block.name}...`);
           
           const platform = await window.electronAPI.getPlatform();
+          
+          // Pass BOTH block ID, instance ID, and MATLAB port as environment variables
           const envCmd = platform === 'win32' 
-            ? `set BLOCK_ID=${block.id} && `
-            : `export BLOCK_ID=${block.id} && `;
+            ? `set BLOCK_ID=${block.id} && set INSTANCE_ID=${instanceConfig.instanceId} && set MATLAB_PORT=${instanceConfig.matlabPort} && `
+            : `export BLOCK_ID=${block.id} && export INSTANCE_ID=${instanceConfig.instanceId} && export MATLAB_PORT=${instanceConfig.matlabPort} && `;
           
           const fullCommand = `${envCmd}matlab -batch "cd('${projectDir}/blocks'); addpath('${projectDir}/cpp'); ${matlabCmd}"`;
           
@@ -357,6 +379,11 @@ export const useServerOperations = ({
   };
 
   const handleStartBlock = async (block, blockProcesses) => {
+    if (!instanceConfig) {
+      addLog('error', 'Instance configuration not loaded');
+      return;
+    }
+
     if (blockProcesses[block.id]) {
       addLog('warning', `${block.name} is already running`);
       return;
@@ -370,14 +397,14 @@ export const useServerOperations = ({
         block.code
       );
 
-      const matlabCmd = buildBlockCommand(block, connections);
+      const matlabCmd = buildBlockCommand(block, connections, instanceConfig);
 
       addLog('info', `Starting ${block.name}...`);
       
       const platform = await window.electronAPI.getPlatform();
       const envCmd = platform === 'win32' 
-        ? `set BLOCK_ID=${block.id} && `
-        : `export BLOCK_ID=${block.id} && `;
+        ? `set BLOCK_ID=${block.id} && set INSTANCE_ID=${instanceConfig.instanceId} && set MATLAB_PORT=${instanceConfig.matlabPort} && `
+        : `export BLOCK_ID=${block.id} && export INSTANCE_ID=${instanceConfig.instanceId} && export MATLAB_PORT=${instanceConfig.matlabPort} && `;
       
       const procResult = await window.electronAPI.startProcess(
         `${envCmd}matlab -batch "cd('${projectDir}/blocks'); addpath('${projectDir}/cpp'); ${matlabCmd}"`,

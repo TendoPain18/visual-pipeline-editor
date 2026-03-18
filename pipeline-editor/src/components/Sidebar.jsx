@@ -10,6 +10,7 @@ export const Sidebar = ({
   blockProcesses,
   executionLog,
   socketConnected,
+  instanceConfig,
   onEditCode,
   onDelete,
   onBlockColorChange,
@@ -21,6 +22,12 @@ export const Sidebar = ({
       <div className="p-4 border-b border-gray-300 bg-gradient-to-r from-blue-600 to-purple-600">
         <h2 className="text-xl font-bold text-white">Pipeline System Designer</h2>
         <p className="text-sm text-blue-100 mt-1">MATLAB Block Diagram Editor</p>
+        {instanceConfig && (
+          <div className="mt-2 text-xs text-blue-50 font-mono">
+            <div>Instance: {instanceConfig.instanceId.substring(0, 16)}...</div>
+            <div>Ports: {instanceConfig.serverPort} / {instanceConfig.matlabPort}</div>
+          </div>
+        )}
       </div>
       
       <div className="flex-1 overflow-auto p-4">
@@ -86,6 +93,25 @@ export const Sidebar = ({
             <div className="mb-4">
               <h3 className="font-semibold text-lg text-gray-800 mb-2">System Status</h3>
               <div className="bg-gray-50 rounded-lg p-3 space-y-2 text-sm">
+                {instanceConfig && (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-gray-700">Instance ID:</span>
+                      <span className="font-mono text-xs text-gray-900" title={instanceConfig.instanceId}>
+                        {instanceConfig.instanceId.substring(0, 12)}...
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-700">Server Port:</span>
+                      <span className="font-semibold text-gray-900">{instanceConfig.serverPort}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-700">MATLAB Port:</span>
+                      <span className="font-semibold text-gray-900">{instanceConfig.matlabPort}</span>
+                    </div>
+                    <div className="border-t border-gray-200 my-2"></div>
+                  </>
+                )}
                 <div className="flex justify-between">
                   <span className="text-gray-700">Blocks:</span>
                   <span className="font-semibold text-gray-900">{blocks.length}</span>

@@ -1,205 +1,225 @@
+#include <winsock2.h>
 #include <windows.h>
+#include <ws2tcpip.h>
 #include <stdio.h>
 #include <signal.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
 #include <string>
-#include <time.h>
+#include <vector>
+#include <set>
+#include <map>
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define MAX_BUFFERS 100
-#define SOCKET_PORT 9000
-#define MAX_MSG_SIZE 4096
+// SOCKET-BASED PIPE SERVER
+// Accepts port as command-line argument for multi-instance support
+// FEATURE: Tracks MATLAB block PIDs and kills them if UI socket disconnects
 
-HANDLE handles[MAX_BUFFERS * 3];
+std::vector<HANDLE> handles;
 volatile bool running = true;
+SOCKET serverSocket = INVALID_SOCKET;
 SOCKET clientSocket = INVALID_SOCKET;
 
-// Configuration
-int numBuffers = 0;
-unsigned long long bufferSizes[MAX_BUFFERS];
-char pipeNames[MAX_BUFFERS][128];
+// PID registry: pid -> block name (for logging)
+std::map<DWORD, std::string> registeredPids;
 
 void cleanup(int sig) {
-    printf("\nShutting down gracefully...\n");
+    printf("\nShutting down...\n");
     running = false;
 }
 
-// Send JSON message to Electron
-bool sendMessage(SOCKET sock, const char* type, const char* message, const char* data = NULL) {
-    if (sock == INVALID_SOCKET) return false;
-    
-    char jsonMsg[MAX_MSG_SIZE];
-    time_t now = time(NULL);
-    struct tm* tm_info = localtime(&now);
-    char timestamp[26];
-    strftime(timestamp, 26, "%Y-%m-%d %H:%M:%S", tm_info);
-    
-    if (data) {
-        snprintf(jsonMsg, sizeof(jsonMsg), 
-            "{\"type\":\"%s\",\"message\":\"%s\",\"data\":\"%s\",\"timestamp\":\"%s\"}\n",
-            type, message, data, timestamp);
+void sendMessage(SOCKET sock, const char* type, const char* message) {
+    if (sock == INVALID_SOCKET) return;
+
+    char buffer[1024];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+
+    snprintf(buffer, sizeof(buffer),
+        "{\"type\":\"%s\",\"message\":\"%s\",\"timestamp\":\"%02d:%02d:%02d.%03d\"}\n",
+        type, message, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
+    send(sock, buffer, (int)strlen(buffer), 0);
+}
+
+// Kill a process by PID using TerminateProcess
+void killPid(DWORD pid, const char* name) {
+    HANDLE hProc = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (!hProc) {
+        printf("[PID Cleanup] Cannot open process %lu (%s) - may already be gone\n", pid, name);
+        return;
+    }
+
+    // Check if it's still alive before killing
+    DWORD exitCode = 0;
+    if (GetExitCodeProcess(hProc, &exitCode) && exitCode == STILL_ACTIVE) {
+        if (TerminateProcess(hProc, 1)) {
+            printf("[PID Cleanup] Killed PID %lu (%s)\n", pid, name);
+        } else {
+            printf("[PID Cleanup] Failed to kill PID %lu (%s) - Error: %lu\n", pid, name, GetLastError());
+        }
     } else {
-        snprintf(jsonMsg, sizeof(jsonMsg), 
-            "{\"type\":\"%s\",\"message\":\"%s\",\"timestamp\":\"%s\"}\n",
-            type, message, timestamp);
+        printf("[PID Cleanup] PID %lu (%s) already exited (code: %lu)\n", pid, name, exitCode);
     }
-    
-    int sent = send(sock, jsonMsg, strlen(jsonMsg), 0);
-    if (sent == SOCKET_ERROR) {
-        printf("Send failed: %d\n", WSAGetLastError());
-        return false;
+
+    CloseHandle(hProc);
+}
+
+// Kill all registered MATLAB block processes
+void killAllRegisteredPids() {
+    if (registeredPids.empty()) {
+        printf("[PID Cleanup] No registered PIDs to clean up\n");
+        return;
     }
+
+    printf("\n========================================\n");
+    printf("[PID Cleanup] Killing %zu registered MATLAB process(es)...\n", registeredPids.size());
+    printf("========================================\n");
+
+    for (auto& entry : registeredPids) {
+        killPid(entry.first, entry.second.c_str());
+    }
+
+    registeredPids.clear();
+    printf("[PID Cleanup] Done.\n\n");
+}
+
+// Parse a simple JSON field: {"type":"REGISTER_PID","pid":1234,"name":"FileSource"}
+// We only need a minimal parser for these control messages.
+bool extractJsonString(const std::string& json, const std::string& key, std::string& outVal) {
+    // Look for "key":"value"
+    std::string searchKey = "\"" + key + "\":\"";
+    size_t pos = json.find(searchKey);
+    if (pos == std::string::npos) return false;
+    pos += searchKey.size();
+    size_t end = json.find("\"", pos);
+    if (end == std::string::npos) return false;
+    outVal = json.substr(pos, end - pos);
     return true;
 }
 
-// Check if client is still connected
-bool isClientConnected(SOCKET sock) {
-    if (sock == INVALID_SOCKET) return false;
-    
-    char buffer;
-    int result = recv(sock, &buffer, 1, MSG_PEEK);
-    
-    if (result == 0) {
-        // Connection closed gracefully
-        return false;
-    } else if (result == SOCKET_ERROR) {
-        int error = WSAGetLastError();
-        if (error == WSAEWOULDBLOCK) {
-            // No data available, but connection is alive
-            return true;
+bool extractJsonNumber(const std::string& json, const std::string& key, long& outVal) {
+    // Look for "key":number
+    std::string searchKey = "\"" + key + "\":";
+    size_t pos = json.find(searchKey);
+    if (pos == std::string::npos) return false;
+    pos += searchKey.size();
+    // Skip whitespace
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+    if (pos >= json.size()) return false;
+    char* endPtr = nullptr;
+    outVal = strtol(json.c_str() + pos, &endPtr, 10);
+    return (endPtr != json.c_str() + pos);
+}
+
+// Handle a control message received from Electron
+void handleControlMessage(const std::string& json) {
+    std::string msgType;
+    if (!extractJsonString(json, "type", msgType)) return;
+
+    if (msgType == "REGISTER_PID") {
+        long pid = 0;
+        std::string name = "unknown";
+        extractJsonNumber(json, "pid", pid);
+        extractJsonString(json, "name", name);
+
+        if (pid > 0) {
+            registeredPids[(DWORD)pid] = name;
+            printf("[PID Registry] Registered PID %ld (%s) | Total tracked: %zu\n",
+                   pid, name.c_str(), registeredPids.size());
         }
-        // Other errors mean connection is dead
-        return false;
+
+    } else if (msgType == "UNREGISTER_PID") {
+        long pid = 0;
+        std::string name = "unknown";
+        extractJsonNumber(json, "pid", pid);
+        extractJsonString(json, "name", name);
+
+        if (pid > 0) {
+            auto it = registeredPids.find((DWORD)pid);
+            if (it != registeredPids.end()) {
+                registeredPids.erase(it);
+                printf("[PID Registry] Unregistered PID %ld (%s) | Remaining tracked: %zu\n",
+                       pid, name.c_str(), registeredPids.size());
+            }
+        }
+
+    } else if (msgType == "PING") {
+        // UI is alive - nothing to do, heartbeat handled via recv check
     }
-    
-    return true;
 }
 
 int main(int argc, char* argv[]) {
     signal(SIGINT, cleanup);
-    
+
+    if (argc < 3) {
+        printf("Usage: pipe_server.exe <num_buffers> <port> <pipe1_name> <size1> ...\n");
+        printf("Example: pipe_server.exe 2 9000 Instance_12345_P1 67108864 Instance_12345_P2 67108864\n");
+        return 1;
+    }
+
+    int numBuffers = atoi(argv[1]);
+    int port = atoi(argv[2]);
+
+    if (numBuffers <= 0 || port <= 0) {
+        printf("ERROR: Invalid number of buffers or port\n");
+        return 1;
+    }
+
+    int expectedArgs = 3 + (numBuffers * 2);
+    if (argc != expectedArgs) {
+        printf("ERROR: Expected %d arguments, got %d\n", expectedArgs, argc);
+        return 1;
+    }
+
+    printf("========================================\n");
+    printf("PIPE SERVER - Socket Version\n");
+    printf("========================================\n");
+    printf("Port:        %d\n", port);
+    printf("Num Buffers: %d\n", numBuffers);
+    printf("PID Tracking: ENABLED\n");
+    printf("========================================\n\n");
+
     // Initialize Winsock
     WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        printf("ERROR: WSAStartup failed\n");
+    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (result != 0) {
+        printf("ERROR: WSAStartup failed: %d\n", result);
         return 1;
     }
-    
-    printf("========================================\n");
-    printf("PIPE SERVER - Socket Communication\n");
-    printf("========================================\n");
-    printf("Version:     2.0-Socket\n");
-    printf("Socket Port: %d\n", SOCKET_PORT);
-    printf("========================================\n\n");
-    
-    // Parse command line arguments
-    if (argc < 2) {
-        printf("ERROR: Usage: pipe_server.exe <num_buffers> <pipe1> <size1> <pipe2> <size2> ...\n");
-        WSACleanup();
-        return 1;
-    }
-    
-    numBuffers = atoi(argv[1]);
-    
-    if (numBuffers <= 0 || numBuffers > MAX_BUFFERS) {
-        printf("ERROR: Invalid number of buffers: %d\n", numBuffers);
-        WSACleanup();
-        return 1;
-    }
-    
-    // Parse pipe names and sizes
-    int argIndex = 2;
-    for (int i = 0; i < numBuffers; i++) {
-        if (argIndex >= argc) {
-            printf("ERROR: Missing pipe name for buffer %d\n", i);
-            WSACleanup();
-            return 1;
-        }
-        strncpy(pipeNames[i], argv[argIndex++], sizeof(pipeNames[i]) - 1);
-        
-        if (argIndex >= argc) {
-            printf("ERROR: Missing size for buffer %d\n", i);
-            WSACleanup();
-            return 1;
-        }
-        bufferSizes[i] = strtoull(argv[argIndex++], NULL, 10);
-    }
-    
-    printf("Configuration loaded: %d buffers\n\n", numBuffers);
-    
-    // Create socket
-    SOCKET serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+    // Create socket server
+    serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (serverSocket == INVALID_SOCKET) {
         printf("ERROR: Socket creation failed: %d\n", WSAGetLastError());
         WSACleanup();
         return 1;
     }
-    
-    // Set socket to non-blocking mode for connection checks
-    u_long mode = 1;
-    ioctlsocket(serverSocket, FIONBIO, &mode);
-    
-    // Bind socket
-    struct sockaddr_in serverAddr;
+
+    int reuse = 1;
+    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, (char*)&reuse, sizeof(reuse));
+
+    sockaddr_in serverAddr;
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_addr.s_addr = INADDR_ANY;
-    serverAddr.sin_port = htons(SOCKET_PORT);
-    
-    if (bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
-        printf("ERROR: Bind failed: %d\n", WSAGetLastError());
+    serverAddr.sin_port = htons(port);
+
+    if (bind(serverSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        printf("ERROR: Bind failed on port %d: %d\n", port, WSAGetLastError());
         closesocket(serverSocket);
         WSACleanup();
         return 1;
     }
-    
-    // Listen for connections
+
     if (listen(serverSocket, 1) == SOCKET_ERROR) {
         printf("ERROR: Listen failed: %d\n", WSAGetLastError());
         closesocket(serverSocket);
         WSACleanup();
         return 1;
     }
-    
-    printf("Socket server listening on port %d...\n", SOCKET_PORT);
-    printf("Waiting for Electron client to connect...\n\n");
-    
-    // Wait for client connection
-    struct sockaddr_in clientAddr;
-    int clientAddrSize = sizeof(clientAddr);
-    
-    while (clientSocket == INVALID_SOCKET && running) {
-        clientSocket = accept(serverSocket, (struct sockaddr*)&clientAddr, &clientAddrSize);
-        if (clientSocket == INVALID_SOCKET) {
-            int error = WSAGetLastError();
-            if (error != WSAEWOULDBLOCK) {
-                printf("ERROR: Accept failed: %d\n", error);
-                break;
-            }
-            Sleep(100); // Wait a bit before trying again
-        }
-    }
-    
-    if (clientSocket == INVALID_SOCKET) {
-        printf("ERROR: Failed to accept client connection\n");
-        closesocket(serverSocket);
-        WSACleanup();
-        return 1;
-    }
-    
-    // Set client socket to non-blocking for connection monitoring
-    u_long clientMode = 1;
-    ioctlsocket(clientSocket, FIONBIO, &clientMode);
-    
-    printf("Client connected from %s:%d\n\n", 
-           inet_ntoa(clientAddr.sin_addr), 
-           ntohs(clientAddr.sin_port));
-    
-    // Send connection confirmation
-    sendMessage(clientSocket, "CONNECTED", "Server connected to client");
-    
-    // Create shared memory and events
+
+    printf("Socket server listening on port %d\n\n", port);
+
+    // Create shared memory pipes
     SECURITY_ATTRIBUTES sa;
     SECURITY_DESCRIPTOR sd;
     InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
@@ -207,108 +227,119 @@ int main(int argc, char* argv[]) {
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
     sa.lpSecurityDescriptor = &sd;
     sa.bInheritHandle = FALSE;
-    
-    sendMessage(clientSocket, "STATUS", "Creating shared memory buffers...");
-    
-    int idx = 0;
+
     for (int i = 0; i < numBuffers; i++) {
-        // Create file mapping
-        handles[idx] = CreateFileMappingA(
-            INVALID_HANDLE_VALUE, 
-            &sa, 
-            PAGE_READWRITE,
-            (DWORD)(bufferSizes[i] >> 32),
-            (DWORD)(bufferSizes[i] & 0xFFFFFFFF),
-            pipeNames[i]
+        int argIdx = 3 + (i * 2);
+        const char* pipeName = argv[argIdx];
+        unsigned long long size = strtoull(argv[argIdx + 1], NULL, 10);
+
+        HANDLE hFile = CreateFileMappingA(
+            INVALID_HANDLE_VALUE, &sa, PAGE_READWRITE,
+            (DWORD)(size >> 32),
+            (DWORD)(size & 0xFFFFFFFF),
+            pipeName
         );
-        
-        if (!handles[idx]) {
-            char errMsg[256];
-            snprintf(errMsg, sizeof(errMsg), "Failed to create %s", pipeNames[i]);
-            sendMessage(clientSocket, "ERROR", errMsg);
-            printf("ERROR: %s (Error: %d)\n", errMsg, GetLastError());
-            running = false;
-            break;
+
+        if (!hFile) {
+            printf("ERROR: Failed to create %s (Error: %lu)\n", pipeName, GetLastError());
+            return 1;
         }
-        
-        char successMsg[256];
-        snprintf(successMsg, sizeof(successMsg), "Created %s (%.2f MB)", 
-                 pipeNames[i], bufferSizes[i] / (1024.0 * 1024.0));
-        sendMessage(clientSocket, "PIPE_CREATED", successMsg, pipeNames[i]);
-        printf("%s\n", successMsg);
-        idx++;
-        
-        // Create events
-        char readyName[256], emptyName[256];
-        sprintf(readyName, "%s_Ready", pipeNames[i]);
-        sprintf(emptyName, "%s_Empty", pipeNames[i]);
-        
-        handles[idx++] = CreateEventA(&sa, FALSE, FALSE, readyName);
-        handles[idx++] = CreateEventA(&sa, FALSE, TRUE, emptyName);
+
+        handles.push_back(hFile);
+        printf("Created: %s (%.2f MB)\n", pipeName, size / (1024.0 * 1024.0));
+
+        char rName[256], eName[256];
+        sprintf(rName, "%s_Ready", pipeName);
+        sprintf(eName, "%s_Empty", pipeName);
+        handles.push_back(CreateEventA(&sa, FALSE, FALSE, rName));
+        handles.push_back(CreateEventA(&sa, FALSE, TRUE, eName));
     }
-    
-    if (running) {
-        printf("\n========================================\n");
-        printf("PIPELINE SYSTEM READY\n");
-        printf("========================================\n");
-        printf("Active Buffers: %d\n", numBuffers);
-        printf("Socket: Connected\n");
-        printf("Monitoring client connection...\n");
-        printf("Press Ctrl+C to shutdown\n");
-        printf("========================================\n\n");
-        
-        sendMessage(clientSocket, "READY", "Pipeline system ready", NULL);
-        
-        // Main loop - monitor connection
-        int checkCounter = 0;
+
+    printf("\nPIPE SYSTEM: Initialized (%d buffers)\n", numBuffers);
+    printf("Waiting for Electron connection...\n\n");
+
+    // Accept connection (blocking)
+    clientSocket = accept(serverSocket, NULL, NULL);
+    if (clientSocket == INVALID_SOCKET) {
+        printf("ERROR: Accept failed: %d\n", WSAGetLastError());
+    } else {
+        printf("✓ Electron connected via socket\n\n");
+        sendMessage(clientSocket, "CONNECTED", "Pipe server ready");
+        sendMessage(clientSocket, "READY", "All pipes created successfully");
+
+        // Set socket to non-blocking for the recv check
+        u_long mode = 1;
+        ioctlsocket(clientSocket, FIONBIO, &mode);
+
+        std::string recvBuffer;
+        DWORD lastHeartbeat = GetTickCount();
+
         while (running) {
-            // Check if client is still connected
-            if (!isClientConnected(clientSocket)) {
+            Sleep(200); // Check 5x per second
+
+            // Try to receive any incoming control messages
+            char buf[4096];
+            int recvResult = recv(clientSocket, buf, sizeof(buf) - 1, 0);
+
+            if (recvResult > 0) {
+                buf[recvResult] = '\0';
+                recvBuffer += buf;
+
+                // Process complete newline-delimited messages
+                size_t newlinePos;
+                while ((newlinePos = recvBuffer.find('\n')) != std::string::npos) {
+                    std::string line = recvBuffer.substr(0, newlinePos);
+                    recvBuffer = recvBuffer.substr(newlinePos + 1);
+
+                    if (!line.empty() && line[0] == '{') {
+                        handleControlMessage(line);
+                    }
+                }
+
+                lastHeartbeat = GetTickCount();
+
+            } else if (recvResult == 0) {
+                // Clean disconnect
                 printf("\n========================================\n");
-                printf("CLIENT DISCONNECTED\n");
+                printf("Electron disconnected (clean close)\n");
                 printf("========================================\n");
-                printf("Electron client has disconnected.\n");
-                printf("Initiating shutdown...\n");
                 running = false;
-                break;
+
+            } else {
+                int err = WSAGetLastError();
+                if (err == WSAEWOULDBLOCK) {
+                    // No data right now - normal, continue heartbeat check
+                    DWORD now = GetTickCount();
+                    if (now - lastHeartbeat > 5000) {
+                        sendMessage(clientSocket, "HEARTBEAT", "Server alive");
+                        lastHeartbeat = now;
+                    }
+                } else if (err == WSAECONNRESET || err == WSAECONNABORTED || err == WSAENETDOWN) {
+                    // Abnormal disconnect - UI likely crashed
+                    printf("\n========================================\n");
+                    printf("SOCKET ERROR: UI may have crashed! (WSA error: %d)\n", err);
+                    printf("========================================\n");
+                    running = false;
+                }
             }
-            
-            // Heartbeat every 10 seconds
-            checkCounter++;
-            if (checkCounter >= 100) { // 100 * 100ms = 10 seconds
-                sendMessage(clientSocket, "HEARTBEAT", "Server alive");
-                checkCounter = 0;
-            }
-            
-            Sleep(100); // Check every 100ms
         }
-    }
-    
-    // Cleanup
-    printf("\n========================================\n");
-    printf("CLEANUP\n");
-    printf("========================================\n");
-    
-    sendMessage(clientSocket, "SHUTDOWN", "Server shutting down");
-    
-    printf("Closing handles...\n");
-    for (int i = 0; i < idx; i++) {
-        if (handles[i]) {
-            CloseHandle(handles[i]);
-        }
-    }
-    
-    printf("Closing sockets...\n");
-    if (clientSocket != INVALID_SOCKET) {
+
+        // --- Socket closed (either clean or crash) ---
+        // Kill all registered MATLAB PIDs before we exit
+        killAllRegisteredPids();
+
+        sendMessage(clientSocket, "SHUTDOWN", "Server shutting down");
         closesocket(clientSocket);
     }
+
+    printf("\nCleaning up shared memory...\n");
+    for (HANDLE h : handles) {
+        if (h) CloseHandle(h);
+    }
+
     closesocket(serverSocket);
-    
     WSACleanup();
-    
-    printf("========================================\n");
-    printf("Server shutdown complete\n");
-    printf("========================================\n");
-    
+
+    printf("Shutdown complete\n");
     return 0;
 }

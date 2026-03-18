@@ -1,20 +1,36 @@
 function socketObj = matlab_socket_client(host, port, maxRetries)
-% MATLAB_SOCKET_CLIENT - Connect to Electron via TCP socket
+% MATLAB_SOCKET_CLIENT - Connect to Electron via TCP socket (INSTANCE-AWARE)
 %
 % Usage:
+%   socketObj = matlab_socket_client()  % Uses MATLAB_PORT env var
 %   socketObj = matlab_socket_client('localhost', 9001)
 %   socketObj = matlab_socket_client('localhost', 9001, 10)
 %
 % Inputs:
 %   host       - Socket host (default: 'localhost')
-%   port       - Socket port (default: 9001)
+%   port       - Socket port (default: from MATLAB_PORT env var, or 9001)
 %   maxRetries - Max connection attempts (default: 10)
 %
 % Output:
 %   socketObj  - TCP client object, or [] if connection failed
+%
+% Environment Variables:
+%   MATLAB_PORT - Instance-specific MATLAB socket port (set by Electron)
 
     if nargin < 1, host = 'localhost'; end
-    if nargin < 2, port = 9001; end
+    
+    % Get port from environment variable if available
+    if nargin < 2
+        matlabPortStr = getenv('MATLAB_PORT');
+        if ~isempty(matlabPortStr)
+            port = str2double(matlabPortStr);
+            fprintf('[SOCKET] Using instance-specific port from env: %d\n', port);
+        else
+            port = 9001;  % Fallback default
+            fprintf('[SOCKET] Warning: MATLAB_PORT not set, using default: %d\n', port);
+        end
+    end
+    
     if nargin < 3, maxRetries = 10; end
     
     socketObj = [];

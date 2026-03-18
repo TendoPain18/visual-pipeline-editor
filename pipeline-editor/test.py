@@ -23,7 +23,6 @@ with open(output_file, "w", encoding="utf-8") as out_file:
             "block_template2",
             "block_template3",
             "block_template4",
-            "pipe_server.cpp",
             "pipe_server.exe",
             "pipeline_config.h",
             "pipeline_mex.mexw64",
